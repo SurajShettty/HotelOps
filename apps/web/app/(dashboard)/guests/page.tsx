@@ -8,6 +8,7 @@ import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
 import { Pagination } from '@/components/ui/pagination';
 import { GuestLoyaltyBadge, GuestLoyaltyTier } from '@/components/ui/guest-loyalty-badge';
+import { GuestFlagBadge } from '@/components/ui/guest-flag-badge';
 
 const PAGE_SIZE = 10;
 
@@ -19,6 +20,8 @@ interface Guest {
   notes: string | null;
   bookingsCount: number;
   loyaltyBadge: { tier: GuestLoyaltyTier; label: string } | null;
+  isFlagged: boolean;
+  flagReason: string | null;
 }
 
 export default function GuestsPage() {
@@ -164,6 +167,7 @@ export default function GuestsPage() {
                         {g.fullName}
                       </Link>
                       <GuestLoyaltyBadge badge={g.loyaltyBadge} />
+                      <GuestFlagBadge isFlagged={g.isFlagged} flagReason={g.flagReason} />
                     </div>
                   </td>
                   <td className="px-5 py-3 text-slate-600">{g.email ?? '—'}</td>

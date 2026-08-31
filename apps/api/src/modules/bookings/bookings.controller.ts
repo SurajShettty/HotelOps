@@ -4,6 +4,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { BookingsService } from './bookings.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
+import { ExtendBookingDto } from './dto/extend-booking.dto';
 
 @Controller('bookings')
 export class BookingsController {
@@ -16,10 +17,12 @@ export class BookingsController {
     @Query('search') search?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
+    @Query('arrivingOn') arrivingOn?: string,
+    @Query('departingOn') departingOn?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
-    return this.bookingsService.findAllForHotel(hotelId, { status, search, from, to, page, pageSize });
+    return this.bookingsService.findAllForHotel(hotelId, { status, search, from, to, arrivingOn, departingOn, page, pageSize });
   }
 
   @Get(':id')
@@ -37,6 +40,12 @@ export class BookingsController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateBookingDto) {
     return this.bookingsService.update(id, dto);
+  }
+
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
+  @Post(':id/extend')
+  extend(@Param('id') id: string, @Body() dto: ExtendBookingDto) {
+    return this.bookingsService.extend(id, dto);
   }
 
   @Post(':id/cancel')

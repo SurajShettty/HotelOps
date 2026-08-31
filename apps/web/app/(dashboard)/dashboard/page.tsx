@@ -1,10 +1,25 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { BedDouble, Building2, LogIn, LogOut, PercentCircle } from 'lucide-react';
+import {
+  AlertTriangle,
+  BedDouble,
+  Building2,
+  CheckCircle2,
+  Clock,
+  DoorClosed,
+  Eye,
+  EyeOff,
+  LogIn,
+  LogOut,
+  PercentCircle,
+  Wallet,
+  Wrench,
+} from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
+import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 
 interface Room {
   id: string;
@@ -17,8 +32,23 @@ interface Booking {
   status: string;
   checkInDate: string;
   checkOutDate: string;
-  guest: { fullName: string };
+  guest: { fullName: string } & GuestBadgeInfo;
 }
+
+interface DashboardSummary {
+  revenue: { today: number; monthToDate: number };
+  alerts: {
+    roomsNotReadyForArrivals: { bookingId: string; guestName: string; roomNumber: string; roomStatus: string }[];
+    overdueHousekeeping: { taskId: string; roomNumber: string; status: string; minutesOpen: number }[];
+    roomsOutOfService: { roomId: string; roomNumber: string; reason: string }[];
+  };
+}
+
+function money(n: number) {
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+const REVENUE_VISIBLE_KEY = 'hotelops_dashboard_revenue_visible';
 
 function CreateHotelForm() {
   const { setHotelId } = useCurrentHotel();
@@ -67,7 +97,23 @@ export default function DashboardPage() {
   const { hotelId, ready } = useCurrentHotel();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [revenueVisible, setRevenueVisible] = useState(false);
+
+  // Hidden by default (e.g. a front-desk screen visible to walk-ins) — remembered
+  // per browser once toggled, so staff who do want it visible aren't re-hiding it every load.
+  useEffect(() => {
+    setRevenueVisible(localStorage.getItem(REVENUE_VISIBLE_KEY) === 'true');
+  }, []);
+
+  function toggleRevenueVisible() {
+    setRevenueVisible((v) => {
+      const next = !v;
+      localStorage.setItem(REVENUE_VISIBLE_KEY, String(next));
+      return next;
+    });
+  }
 
   useEffect(() => {
     if (!ready || !hotelId) {
@@ -78,10 +124,12 @@ export default function DashboardPage() {
       apiFetch<Room[]>(`/rooms?hotelId=${hotelId}`),
       apiFetch<{ items: Booking[] }>(`/bookings?hotelId=${hotelId}&status=CONFIRMED&pageSize=200`),
       apiFetch<{ items: Booking[] }>(`/bookings?hotelId=${hotelId}&status=CHECKED_IN&pageSize=200`),
+      apiFetch<DashboardSummary>(`/dashboard/summary?hotelId=${hotelId}`),
     ])
-      .then(([roomsData, confirmed, checkedIn]) => {
+      .then(([roomsData, confirmed, checkedIn, summaryData]) => {
         setRooms(roomsData);
         setBookings([...confirmed.items, ...checkedIn.items]);
+        setSummary(summaryData);
       })
       .finally(() => setLoading(false));
   }, [ready, hotelId]);
@@ -101,30 +149,114 @@ export default function DashboardPage() {
   const occupancyPct = rooms.length > 0 ? Math.round((occupied / rooms.length) * 100) : 0;
 
   const kpis = [
-    { label: 'Occupancy today', value: `${occupancyPct}%`, icon: PercentCircle, tint: 'bg-brand-50 text-brand-700' },
-    { label: 'Total rooms', value: rooms.length, icon: BedDouble, tint: 'bg-gold-50 text-gold-700' },
-    { label: 'Arrivals today', value: arrivals.length, icon: LogIn, tint: 'bg-emerald-50 text-emerald-700' },
-    { label: 'Departures today', value: departures.length, icon: LogOut, tint: 'bg-sky-50 text-sky-700' },
+    { key: 'occupancy', label: 'Occupancy today', value: `${occupancyPct}%`, icon: PercentCircle, tint: 'bg-brand-50 text-brand-700' },
+    { key: 'revenueToday', label: 'Revenue today', value: summary ? money(summary.revenue.today) : '—', icon: Wallet, tint: 'bg-gold-50 text-gold-700', sensitive: true },
+    { key: 'revenueMtd', label: 'Revenue MTD', value: summary ? money(summary.revenue.monthToDate) : '—', icon: Wallet, tint: 'bg-gold-50 text-gold-700', sensitive: true },
+    { key: 'totalRooms', label: 'Total rooms', value: rooms.length, icon: BedDouble, tint: 'bg-violet-50 text-violet-700' },
+    { key: 'arrivals', label: 'Arrivals today', value: arrivals.length, icon: LogIn, tint: 'bg-emerald-50 text-emerald-700' },
+    { key: 'departures', label: 'Departures today', value: departures.length, icon: LogOut, tint: 'bg-sky-50 text-sky-700' },
   ];
+
+  const alerts = summary?.alerts;
+  const alertCount = alerts
+    ? alerts.roomsNotReadyForArrivals.length + alerts.overdueHousekeeping.length + alerts.roomsOutOfService.length
+    : 0;
 
   return (
     <div>
       <PageHeader title="Dashboard" subtitle="Today's snapshot for this property." />
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         {kpis.map((kpi) => {
           const Icon = kpi.icon;
+          const masked = kpi.sensitive && !revenueVisible;
           return (
-            <Card key={kpi.label} className="p-5">
-              <div className={`mb-3 flex h-9 w-9 items-center justify-center rounded-lg ${kpi.tint}`}>
-                <Icon className="h-5 w-5" />
+            <Card key={kpi.key} className="p-5">
+              <div className="mb-3 flex items-center justify-between">
+                <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${kpi.tint}`}>
+                  <Icon className="h-5 w-5" />
+                </div>
+                {kpi.sensitive && (
+                  <button
+                    type="button"
+                    onClick={toggleRevenueVisible}
+                    title={masked ? 'Show revenue' : 'Hide revenue'}
+                    className="text-slate-400 hover:text-slate-700"
+                  >
+                    {masked ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+                  </button>
+                )}
               </div>
               <div className="text-sm text-slate-500">{kpi.label}</div>
-              <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">{kpi.value}</div>
+              <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+                {masked ? '••••••' : kpi.value}
+              </div>
             </Card>
           );
         })}
       </div>
+
+      {alerts && (
+        <Card className="mt-6 p-5">
+          <div className="mb-3 flex items-center gap-2">
+            <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${alertCount > 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
+              {alertCount > 0 ? <AlertTriangle className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900">Alerts</h2>
+              <p className="text-xs text-slate-500">{alertCount > 0 ? `${alertCount} item${alertCount === 1 ? '' : 's'} need attention` : 'Nothing needs attention right now'}</p>
+            </div>
+          </div>
+
+          {alertCount > 0 && (
+            <div className="grid gap-4 md:grid-cols-3">
+              {alerts.roomsNotReadyForArrivals.length > 0 && (
+                <div>
+                  <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
+                    <DoorClosed className="h-3.5 w-3.5" /> Room not ready for arrival
+                  </h3>
+                  <ul className="space-y-1.5">
+                    {alerts.roomsNotReadyForArrivals.map((a) => (
+                      <li key={a.bookingId} className="text-sm text-slate-700">
+                        Room {a.roomNumber} — {a.guestName} <span className="text-slate-400">({a.roomStatus.toLowerCase()})</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {alerts.overdueHousekeeping.length > 0 && (
+                <div>
+                  <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
+                    <Clock className="h-3.5 w-3.5" /> Overdue housekeeping
+                  </h3>
+                  <ul className="space-y-1.5">
+                    {alerts.overdueHousekeeping.map((t) => (
+                      <li key={t.taskId} className="text-sm text-slate-700">
+                        Room {t.roomNumber} — {t.status.toLowerCase().replace('_', ' ')}{' '}
+                        <span className="text-slate-400">({t.minutesOpen} min)</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {alerts.roomsOutOfService.length > 0 && (
+                <div>
+                  <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
+                    <Wrench className="h-3.5 w-3.5" /> Rooms out of service
+                  </h3>
+                  <ul className="space-y-1.5">
+                    {alerts.roomsOutOfService.map((r) => (
+                      <li key={r.roomId} className="text-sm text-slate-700">
+                        Room {r.roomNumber} <span className="text-slate-400">({r.reason.toLowerCase().replace('_', ' ')})</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <Card className="p-5">
@@ -134,7 +266,10 @@ export default function DashboardPage() {
           ) : (
             <ul className="divide-y divide-slate-100">
               {arrivals.map((b) => (
-                <li key={b.id} className="py-2 text-sm text-slate-700">{b.guest.fullName}</li>
+                <li key={b.id} className="flex items-center gap-1.5 py-2 text-sm text-slate-700">
+                  {b.guest.fullName}
+                  <GuestBadges guest={b.guest} />
+                </li>
               ))}
             </ul>
           )}
@@ -146,7 +281,10 @@ export default function DashboardPage() {
           ) : (
             <ul className="divide-y divide-slate-100">
               {departures.map((b) => (
-                <li key={b.id} className="py-2 text-sm text-slate-700">{b.guest.fullName}</li>
+                <li key={b.id} className="flex items-center gap-1.5 py-2 text-sm text-slate-700">
+                  {b.guest.fullName}
+                  <GuestBadges guest={b.guest} />
+                </li>
               ))}
             </ul>
           )}

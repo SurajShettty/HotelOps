@@ -5,6 +5,7 @@ import { normalizePagination, PaginatedResult } from '../../common/pagination';
 import { COUNTED_BOOKING_STATUSES, getGuestLoyaltyTier } from './guest-loyalty';
 import { CreateGuestDto } from './dto/create-guest.dto';
 import { UpdateGuestDto } from './dto/update-guest.dto';
+import { FlagGuestDto } from './dto/flag-guest.dto';
 
 type GuestWithBookingsCount = Prisma.GuestGetPayload<{ include: { _count: { select: { bookings: true } } } }>;
 
@@ -42,7 +43,10 @@ export class GuestsService {
         skip,
         take,
         orderBy: { createdAt: 'desc' },
-        include: { _count: { select: { bookings: { where: { status: COUNTED_BOOKING_STATUSES } } } } },
+        include: {
+          _count: { select: { bookings: { where: { status: COUNTED_BOOKING_STATUSES } } } },
+          flaggedBy: { select: { fullName: true } },
+        },
       }),
       this.prisma.guest.count({ where }),
     ]);
@@ -56,6 +60,7 @@ export class GuestsService {
       include: {
         bookings: { orderBy: { checkInDate: 'desc' } },
         _count: { select: { bookings: { where: { status: COUNTED_BOOKING_STATUSES } } } },
+        flaggedBy: { select: { fullName: true } },
       },
     });
     if (!guest) throw new NotFoundException('Guest not found');
@@ -68,5 +73,21 @@ export class GuestsService {
 
   update(id: string, data: UpdateGuestDto) {
     return this.prisma.guest.update({ where: { id }, data });
+  }
+
+  async flag(id: string, dto: FlagGuestDto, staffId: string) {
+    await this.prisma.guest.update({
+      where: { id },
+      data: { isFlagged: true, flagReason: dto.reason, flaggedAt: new Date(), flaggedById: staffId },
+    });
+    return this.findOneWithHistory(id);
+  }
+
+  async unflag(id: string) {
+    await this.prisma.guest.update({
+      where: { id },
+      data: { isFlagged: false, flagReason: null, flaggedAt: null, flaggedById: null },
+    });
+    return this.findOneWithHistory(id);
   }
 }

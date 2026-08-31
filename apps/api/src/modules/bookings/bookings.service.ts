@@ -3,8 +3,10 @@ import { Prisma } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AvailabilityService } from '../rooms/availability.service';
 import { normalizePagination } from '../../common/pagination';
+import { GUEST_LOYALTY_INCLUDE, withGuestLoyaltyBadge } from '../guests/guest-loyalty';
 import { BookingRoomInput, CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
+import { ExtendBookingDto } from './dto/extend-booking.dto';
 
 const ACTIVE_STATUSES_BLOCKING_CANCEL = ['CHECKED_IN', 'CHECKED_OUT', 'COMPLETED'];
 const EDITABLE_STATUSES = ['DRAFT', 'CONFIRMED'];
@@ -71,16 +73,31 @@ export class BookingsService {
     });
   }
 
-  findOne(id: string) {
-    return this.prisma.booking.findUniqueOrThrow({
+  async findOne(id: string) {
+    const booking = await this.prisma.booking.findUniqueOrThrow({
       where: { id },
-      include: { bookingRooms: { include: { room: true } }, guest: true, payments: true, invoice: true },
+      include: {
+        bookingRooms: { include: { room: true } },
+        guest: { include: GUEST_LOYALTY_INCLUDE },
+        payments: true,
+        invoice: true,
+      },
     });
+    return withGuestLoyaltyBadge(booking);
   }
 
   async findAllForHotel(
     hotelId: string,
-    opts: { status?: string; search?: string; from?: string; to?: string; page?: string; pageSize?: string },
+    opts: {
+      status?: string;
+      search?: string;
+      from?: string;
+      to?: string;
+      arrivingOn?: string;
+      departingOn?: string;
+      page?: string;
+      pageSize?: string;
+    },
   ) {
     const { page, pageSize, skip, take } = normalizePagination(opts.page, opts.pageSize);
 
@@ -90,6 +107,10 @@ export class BookingsService {
       ...(opts.search ? { guest: { fullName: { contains: opts.search, mode: 'insensitive' } } } : {}),
       ...(opts.from ? { checkInDate: { gte: new Date(opts.from) } } : {}),
       ...(opts.to ? { checkOutDate: { lte: new Date(opts.to) } } : {}),
+      // Exact-day matches (as opposed to from/to, which bound a range) — used
+      // by the "arriving/departing today" quick filters.
+      ...(opts.arrivingOn ? { checkInDate: new Date(opts.arrivingOn) } : {}),
+      ...(opts.departingOn ? { checkOutDate: new Date(opts.departingOn) } : {}),
     };
 
     const [items, total] = await Promise.all([
@@ -97,13 +118,13 @@ export class BookingsService {
         where,
         skip,
         take,
-        include: { bookingRooms: { include: { room: true } }, guest: true },
+        include: { bookingRooms: { include: { room: true } }, guest: { include: GUEST_LOYALTY_INCLUDE } },
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.booking.count({ where }),
     ]);
 
-    return { items, total, page, pageSize };
+    return { items: items.map(withGuestLoyaltyBadge), total, page, pageSize };
   }
 
   async update(id: string, dto: UpdateBookingDto) {
@@ -144,6 +165,68 @@ export class BookingsService {
       return tx.booking.update({
         where: { id },
         data: { checkInDate: checkIn, checkOutDate: checkOut },
+        include: { bookingRooms: { include: { room: true } }, guest: true },
+      });
+    });
+  }
+
+  /**
+   * A checked-in guest decides to stay longer. Extends checkOutDate, either
+   * in the same room(s) or — if a `roomId` is given — moving a single-room
+   * stay into a different room for the extended nights. The rate already
+   * agreed for the stay is kept as-is; this doesn't re-price the booking,
+   * it only relocates/prolongs it. Availability for the room is re-checked
+   * for the *extension* window only ([old checkOutDate, new checkOutDate)),
+   * not the whole stay, since the guest already legitimately holds the room
+   * up to their original checkout date.
+   */
+  async extend(id: string, dto: ExtendBookingDto) {
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.booking.findUnique({ where: { id }, include: { bookingRooms: true } });
+      if (!existing) throw new NotFoundException('Booking not found');
+      if (existing.hotelId !== dto.hotelId) {
+        throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Booking does not belong to this hotel' });
+      }
+      if (existing.status !== 'CHECKED_IN') {
+        throw new ConflictException({ code: 'INVALID_STATE', message: `Booking must be CHECKED_IN to extend, got ${existing.status}` });
+      }
+
+      const newCheckOut = new Date(dto.checkOutDate);
+      if (newCheckOut <= existing.checkOutDate) {
+        throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'New check-out date must be after the current check-out date' });
+      }
+
+      const isMove = !!dto.roomId && dto.roomId !== existing.bookingRooms[0]?.roomId;
+      if (isMove && existing.bookingRooms.length > 1) {
+        throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Moving rooms mid-stay is only supported for single-room bookings' });
+      }
+
+      const targetRoomIds = isMove ? [dto.roomId!] : existing.bookingRooms.map((br) => br.roomId);
+      if (isMove) {
+        const room = await tx.room.findUnique({ where: { id: dto.roomId! } });
+        if (!room || room.hotelId !== dto.hotelId) {
+          throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Room does not belong to this hotel' });
+        }
+      }
+
+      await this.availabilityService.assertRoomsAvailable(tx, {
+        roomIds: targetRoomIds,
+        checkIn: existing.checkOutDate,
+        checkOut: newCheckOut,
+        excludeBookingId: id,
+      });
+
+      if (isMove) {
+        const oldRoomId = existing.bookingRooms[0].roomId;
+        await tx.bookingRoom.update({ where: { id: existing.bookingRooms[0].id }, data: { roomId: dto.roomId! } });
+        await tx.room.update({ where: { id: oldRoomId }, data: { status: 'DIRTY' } });
+        await tx.housekeepingTask.create({ data: { roomId: oldRoomId, status: 'DIRTY', priority: 1 } });
+        await tx.room.update({ where: { id: dto.roomId! }, data: { status: 'OCCUPIED' } });
+      }
+
+      return tx.booking.update({
+        where: { id },
+        data: { checkOutDate: newCheckOut },
         include: { bookingRooms: { include: { room: true } }, guest: true },
       });
     });

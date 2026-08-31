@@ -7,6 +7,7 @@ import { useCurrentHotel } from '@/lib/hotel-context';
 import { Card, EmptyState, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Pagination } from '@/components/ui/pagination';
+import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 
 type ReportType = 'occupancy' | 'revenue' | 'bookings' | 'cancellations' | 'housekeeping';
 
@@ -143,7 +144,13 @@ function ReportBody({
   }
 
   if (type === 'bookings' || type === 'cancellations') {
-    const { items, total, pageSize } = data as Paginated<{ id: string; status: string; checkInDate: string; checkOutDate: string; guest: { fullName: string } }>;
+    const { items, total, pageSize } = data as Paginated<{
+      id: string;
+      status: string;
+      checkInDate: string;
+      checkOutDate: string;
+      guest: { fullName: string } & GuestBadgeInfo;
+    }>;
     if (items.length === 0) return <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="No results in this range" />;
     return (
       <Card className="overflow-hidden">
@@ -159,7 +166,12 @@ function ReportBody({
           <tbody className="divide-y divide-slate-100">
             {items.map((r) => (
               <tr key={r.id}>
-                <td className="px-5 py-3 font-medium text-slate-900">{r.guest.fullName}</td>
+                <td className="px-5 py-3 font-medium text-slate-900">
+                  <span className="flex items-center gap-1.5">
+                    {r.guest.fullName}
+                    <GuestBadges guest={r.guest} />
+                  </span>
+                </td>
                 <td className="px-5 py-3 text-slate-600">{r.checkInDate.slice(0, 10)}</td>
                 <td className="px-5 py-3 text-slate-600">{r.checkOutDate.slice(0, 10)}</td>
                 <td className="px-5 py-3"><StatusBadge status={r.status} /></td>

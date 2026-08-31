@@ -1,23 +1,36 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { DoorOpen, Plus, Trash2 } from 'lucide-react';
+import { CalendarPlus, DoorOpen, Plus, Search, Trash2 } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, Select } from '@/components/ui/primitives';
 import { PageHeader } from '@/components/ui/primitives';
+import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 
 interface Booking {
   id: string;
   checkInDate: string;
   checkOutDate: string;
-  guest: { fullName: string };
-  bookingRooms: { room: { roomNumber: string } }[];
+  guest: { fullName: string } & GuestBadgeInfo;
+  bookingRooms: { room: { id: string; roomNumber: string } }[];
+}
+
+interface AvailableRoom {
+  id: string;
+  roomNumber: string;
 }
 
 interface LineItem {
   description: string;
   amount: string;
+}
+
+interface RoomCharge {
+  id: string;
+  description: string;
+  amount: string;
+  addedBy: { fullName: string };
 }
 
 interface Folio {
@@ -107,15 +120,38 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
   const [result, setResult] = useState<{ grandTotal: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Charges logged against this stay while it was in progress (see the Rooms
+  // page's per-room "charges" popover) — fetched here so checkout doesn't
+  // require re-typing what housekeeping/front desk already logged, and the
+  // server folds these into the same total automatically.
+  const [loggedCharges, setLoggedCharges] = useState<RoomCharge[]>([]);
+  const [loggedChargesVersion, setLoggedChargesVersion] = useState(0);
+
+  useEffect(() => {
+    apiFetch<RoomCharge[]>(`/room-charges?bookingId=${booking.id}`)
+      .then(setLoggedCharges)
+      .catch(() => setLoggedCharges([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [booking.id, loggedChargesVersion]);
+
+  async function handleRemoveLoggedCharge(id: string) {
+    try {
+      await apiFetch(`/room-charges/${id}`, { method: 'DELETE' });
+      setLoggedChargesVersion((v) => v + 1);
+    } catch {
+      // Non-fatal — the folio preview below still reflects the server's true state either way.
+    }
+  }
+
   function updateLine(list: LineItem[], setList: (v: LineItem[]) => void, i: number, field: keyof LineItem, value: string) {
     const next = [...list];
     next[i] = { ...next[i], [field]: value };
     setList(next);
   }
 
-  // Recompute the live total (debounced) whenever charges/discounts change —
-  // the amount to be paid is calculated automatically, not left for the
-  // receptionist to work out by hand.
+  // Recompute the live total (debounced) whenever charges/discounts/logged
+  // charges change — the amount to be paid is calculated automatically, not
+  // left for the receptionist to work out by hand.
   useEffect(() => {
     setPreviewLoading(true);
     const timer = setTimeout(() => {
@@ -136,7 +172,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
     }, 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(charges), JSON.stringify(discounts)]);
+  }, [JSON.stringify(charges), JSON.stringify(discounts), loggedChargesVersion]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -174,6 +210,27 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
     <Card className="p-5">
       <form onSubmit={handleSubmit} className="space-y-5">
         {error && <ErrorBanner>{error}</ErrorBanner>}
+
+        {loggedCharges.length > 0 && (
+          <div>
+            <Label>Room charges logged during stay</Label>
+            <ul className="mt-2 space-y-1.5 rounded-lg border border-slate-200 p-3">
+              {loggedCharges.map((c) => (
+                <li key={c.id} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="text-slate-700">
+                    {c.description} <span className="text-xs text-slate-400">— {c.addedBy.fullName}</span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2 text-slate-600">
+                    {c.amount}
+                    <button type="button" onClick={() => handleRemoveLoggedCharge(c.id)} className="text-slate-400 hover:text-rose-600">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div>
           <div className="mb-2 flex items-center justify-between">
@@ -246,11 +303,140 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
   );
 }
 
+function addDaysIso(iso: string, n: number) {
+  const d = new Date(iso.slice(0, 10));
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * "Actually, can we stay another night?" — checks whether the guest's current
+ * room is free for the extension window and, if not, offers whichever other
+ * rooms are. Availability is only re-checked for [today's checkout date, new
+ * checkout date) — the guest already legitimately holds the room up to today.
+ */
+function ExtendStayForm({ hotelId, booking, onDone, onCancel }: { hotelId: string; booking: Booking; onDone: () => void; onCancel: () => void }) {
+  const currentRoom = booking.bookingRooms[0]?.room ?? null;
+  const isMultiRoom = booking.bookingRooms.length > 1;
+
+  const [newCheckOut, setNewCheckOut] = useState(addDaysIso(booking.checkOutDate, 1));
+  const [availableRooms, setAvailableRooms] = useState<AvailableRoom[]>([]);
+  const [checking, setChecking] = useState(false);
+  const [selectedRoomId, setSelectedRoomId] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!newCheckOut) {
+      setAvailableRooms([]);
+      return;
+    }
+    setChecking(true);
+    const timer = setTimeout(() => {
+      apiFetch<{ availableRooms: AvailableRoom[] }>(
+        `/rooms/availability?hotelId=${hotelId}&checkIn=${booking.checkOutDate.slice(0, 10)}&checkOut=${newCheckOut}&excludeBookingId=${booking.id}`,
+      )
+        .then((res) => {
+          setAvailableRooms(res.availableRooms);
+          setSelectedRoomId((prev) => (prev && res.availableRooms.some((r) => r.id === prev) ? prev : res.availableRooms[0]?.id ?? ''));
+        })
+        .catch(() => setAvailableRooms([]))
+        .finally(() => setChecking(false));
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hotelId, booking.id, booking.checkOutDate, newCheckOut]);
+
+  const sameRoomAvailable = !isMultiRoom && !!currentRoom && availableRooms.some((r) => r.id === currentRoom.id);
+  const allCurrentRoomsAvailable = isMultiRoom && booking.bookingRooms.every((br) => availableRooms.some((r) => r.id === br.room.id));
+  const otherRooms = availableRooms.filter((r) => r.id !== currentRoom?.id);
+
+  async function handleExtend(roomId?: string) {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await apiFetch(`/bookings/${booking.id}/extend`, {
+        method: 'POST',
+        body: JSON.stringify({ hotelId, checkOutDate: newCheckOut, ...(roomId ? { roomId } : {}) }),
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to extend stay');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      {error && <div className="mb-4"><ErrorBanner>{error}</ErrorBanner></div>}
+      <div className="max-w-xs">
+        <Label htmlFor={`extend-${booking.id}`}>New check-out date</Label>
+        <Input
+          id={`extend-${booking.id}`}
+          type="date"
+          min={addDaysIso(booking.checkOutDate, 1)}
+          value={newCheckOut}
+          onChange={(e) => setNewCheckOut(e.target.value)}
+        />
+      </div>
+
+      <div className="mt-4">
+        {checking ? (
+          <p className="text-sm text-slate-400">Checking availability…</p>
+        ) : isMultiRoom ? (
+          allCurrentRoomsAvailable ? (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+              <p className="text-sm text-emerald-800">Both/all rooms are available through {newCheckOut}.</p>
+              <Button onClick={() => handleExtend()} disabled={submitting}>{submitting ? 'Extending…' : 'Extend Stay'}</Button>
+            </div>
+          ) : (
+            <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              Not all of this booking's rooms are free through {newCheckOut} — multi-room moves aren't supported here; adjust the date or edit the booking manually.
+            </p>
+          )
+        ) : sameRoomAvailable ? (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+            <p className="text-sm text-emerald-800">Room {currentRoom?.roomNumber} is free through {newCheckOut} — no need to move.</p>
+            <Button onClick={() => handleExtend()} disabled={submitting}>{submitting ? 'Extending…' : 'Extend Stay'}</Button>
+          </div>
+        ) : otherRooms.length > 0 ? (
+          <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm text-amber-800">
+              Room {currentRoom?.roomNumber} isn't free through {newCheckOut}, but another room is available to move into:
+            </p>
+            <div className="flex gap-2">
+              <Select value={selectedRoomId} onChange={(e) => setSelectedRoomId(e.target.value)} className="flex-1">
+                {otherRooms.map((r) => (
+                  <option key={r.id} value={r.id}>Room {r.roomNumber}</option>
+                ))}
+              </Select>
+              <Button onClick={() => handleExtend(selectedRoomId)} disabled={submitting || !selectedRoomId}>
+                {submitting ? 'Moving…' : 'Move & Extend'}
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+            No rooms are available through {newCheckOut}. Try a different date.
+          </p>
+        )}
+      </div>
+
+      <button type="button" onClick={onCancel} className="mt-4 text-sm text-slate-400 hover:text-slate-700">
+        Cancel
+      </button>
+    </Card>
+  );
+}
+
 export default function CheckoutPage() {
   const { hotelId, ready } = useCurrentHotel();
   const [stays, setStays] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [extendingId, setExtendingId] = useState<string | null>(null);
+  const [roomSearch, setRoomSearch] = useState('');
 
   function reload() {
     if (!hotelId) return;
@@ -265,6 +451,10 @@ export default function CheckoutPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, hotelId]);
 
+  const visibleStays = roomSearch.trim()
+    ? stays.filter((b) => b.bookingRooms.some((br) => br.room.roomNumber.toLowerCase().includes(roomSearch.trim().toLowerCase())))
+    : stays;
+
   if (!ready) return null;
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
@@ -272,33 +462,88 @@ export default function CheckoutPage() {
     <div>
       <PageHeader title="Check-Out" subtitle="Guests currently staying, ready to settle up." />
 
+      {stays.length > 0 && (
+        <Card className="mb-4 p-3">
+          <div className="relative w-64">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <Input
+              placeholder="Search room number…"
+              value={roomSearch}
+              onChange={(e) => setRoomSearch(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+        </Card>
+      )}
+
       {loading ? (
         <p className="text-sm text-slate-400">Loading…</p>
       ) : stays.length === 0 ? (
         <EmptyState icon={<DoorOpen className="h-8 w-8" />} title="No one to check out" description="Guests who are checked in will show up here." />
+      ) : visibleStays.length === 0 ? (
+        <EmptyState icon={<DoorOpen className="h-8 w-8" />} title="No matching room" description="Try a different room number." />
       ) : (
         <div className="space-y-3">
-          {stays.map((b) => (
-            <div key={b.id}>
-              <Card className="flex flex-wrap items-center justify-between gap-4 p-5">
-                <div>
-                  <div className="font-medium text-slate-900">{b.guest.fullName}</div>
-                  <div className="mt-1 text-sm text-slate-500">
-                    {b.checkInDate.slice(0, 10)} → {b.checkOutDate.slice(0, 10)} · Room{' '}
-                    {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+          {visibleStays.map((b) => {
+            const departingToday = b.checkOutDate.slice(0, 10) === new Date().toISOString().slice(0, 10);
+            return (
+              <div key={b.id}>
+                <Card className="flex flex-wrap items-center justify-between gap-4 p-5">
+                  <div>
+                    <div className="flex items-center gap-1.5 font-medium text-slate-900">
+                      {b.guest.fullName}
+                      <GuestBadges guest={b.guest} />
+                      {departingToday && (
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 ring-1 ring-inset ring-amber-200">
+                          Departing today
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {b.checkInDate.slice(0, 10)} → {b.checkOutDate.slice(0, 10)} · Room{' '}
+                      {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+                    </div>
                   </div>
-                </div>
-                <Button variant={activeId === b.id ? 'secondary' : 'primary'} onClick={() => setActiveId(activeId === b.id ? null : b.id)}>
-                  {activeId === b.id ? 'Close' : 'Check Out'}
-                </Button>
-              </Card>
-              {activeId === b.id && (
-                <div className="mt-2">
-                  <FolioForm booking={b} onDone={() => { setActiveId(null); reload(); }} />
-                </div>
-              )}
-            </div>
-          ))}
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setActiveId(null);
+                        setExtendingId(extendingId === b.id ? null : b.id);
+                      }}
+                    >
+                      <CalendarPlus className="h-4 w-4" />
+                      {extendingId === b.id ? 'Close' : 'Wants to stay longer?'}
+                    </Button>
+                    <Button
+                      variant={activeId === b.id ? 'secondary' : 'primary'}
+                      onClick={() => {
+                        setExtendingId(null);
+                        setActiveId(activeId === b.id ? null : b.id);
+                      }}
+                    >
+                      {activeId === b.id ? 'Close' : 'Check Out'}
+                    </Button>
+                  </div>
+                </Card>
+                {extendingId === b.id && (
+                  <div className="mt-2">
+                    <ExtendStayForm
+                      hotelId={hotelId}
+                      booking={b}
+                      onCancel={() => setExtendingId(null)}
+                      onDone={() => { setExtendingId(null); reload(); }}
+                    />
+                  </div>
+                )}
+                {activeId === b.id && (
+                  <div className="mt-2">
+                    <FolioForm booking={b} onDone={() => { setActiveId(null); reload(); }} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

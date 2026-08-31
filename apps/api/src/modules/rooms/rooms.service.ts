@@ -5,12 +5,13 @@ import { PrismaService } from '../../prisma/prisma.service';
 export class RoomsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  findAllForHotel(hotelId: string, opts: { status?: string; roomTypeId?: string } = {}) {
+  findAllForHotel(hotelId: string, opts: { status?: string; roomTypeId?: string; floor?: string } = {}) {
     return this.prisma.room.findMany({
       where: {
         hotelId,
         ...(opts.status ? { status: opts.status as never } : {}),
         ...(opts.roomTypeId ? { roomTypeId: opts.roomTypeId } : {}),
+        ...(opts.floor ? { floor: opts.floor } : {}),
       },
       include: { roomType: true },
       orderBy: { roomNumber: 'asc' },
@@ -23,5 +24,9 @@ export class RoomsService {
 
   updateStatus(id: string, status: 'AVAILABLE' | 'OCCUPIED' | 'DIRTY' | 'OUT_OF_ORDER') {
     return this.prisma.room.update({ where: { id }, data: { status } });
+  }
+
+  updateFloor(id: string, floor: string | null) {
+    return this.prisma.room.update({ where: { id }, data: { floor } });
   }
 }

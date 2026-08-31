@@ -12,8 +12,13 @@ export class RoomsController {
   ) {}
 
   @Get()
-  findAll(@Query('hotelId') hotelId: string, @Query('status') status?: string, @Query('roomTypeId') roomTypeId?: string) {
-    return this.roomsService.findAllForHotel(hotelId, { status, roomTypeId });
+  findAll(
+    @Query('hotelId') hotelId: string,
+    @Query('status') status?: string,
+    @Query('roomTypeId') roomTypeId?: string,
+    @Query('floor') floor?: string,
+  ) {
+    return this.roomsService.findAllForHotel(hotelId, { status, roomTypeId, floor });
   }
 
   @Get('availability')
@@ -37,5 +42,13 @@ export class RoomsController {
   @Patch(':id/status')
   updateStatus(@Param('id') id: string, @Body('status') status: 'AVAILABLE' | 'OCCUPIED' | 'DIRTY' | 'OUT_OF_ORDER') {
     return this.roomsService.updateStatus(id, status);
+  }
+
+  // `hotelId` in the body is read by RolesGuard for scoping only, same convention
+  // as PATCH /room-types/:id — Room's floor update doesn't otherwise need it.
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')
+  @Patch(':id/floor')
+  updateFloor(@Param('id') id: string, @Body() body: { hotelId: string; floor: string | null }) {
+    return this.roomsService.updateFloor(id, body.floor || null);
   }
 }

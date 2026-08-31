@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CalendarRange, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
+import { CalendarRange, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
@@ -9,6 +9,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
 import { Pagination } from '@/components/ui/pagination';
 import { GuestPicker, PickedGuest } from '@/components/ui/guest-picker';
+import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 
 const PAGE_SIZE = 10;
 
@@ -28,7 +29,7 @@ interface Booking {
   status: string;
   checkInDate: string;
   checkOutDate: string;
-  guest: { fullName: string };
+  guest: { fullName: string } & GuestBadgeInfo;
   bookingRooms: { occupants: number; room: { id: string; roomNumber: string } }[];
 }
 
@@ -177,8 +178,9 @@ function BookingForm({
         {error && <ErrorBanner>{error}</ErrorBanner>}
         {!isEdit && <GuestPicker hotelId={hotelId} value={pickedGuest} onChange={setPickedGuest} />}
         {isEdit && (
-          <p className="text-sm text-slate-500">
+          <p className="flex items-center gap-1.5 text-sm text-slate-500">
             Editing <span className="font-medium text-slate-900">{initial!.guest.fullName}</span>&apos;s booking
+            <GuestBadges guest={initial!.guest} />
           </p>
         )}
         <div>
@@ -267,6 +269,16 @@ export default function BookingsPage() {
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [quickFilter, setQuickFilter] = useState<'ARRIVING_TODAY' | 'DEPARTING_TODAY' | null>(null);
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  function toggleQuickFilter(filter: 'ARRIVING_TODAY' | 'DEPARTING_TODAY') {
+    const turningOn = quickFilter !== filter;
+    setQuickFilter(turningOn ? filter : null);
+    setStatus(turningOn ? (filter === 'ARRIVING_TODAY' ? 'CONFIRMED' : 'CHECKED_IN') : '');
+    setPage(1);
+  }
 
   // Debounce the free-text search so we're not hitting the API on every keystroke.
   useEffect(() => {
@@ -283,6 +295,8 @@ export default function BookingsPage() {
     const params = new URLSearchParams({ hotelId, page: String(page), pageSize: String(PAGE_SIZE) });
     if (status) params.set('status', status);
     if (search) params.set('search', search);
+    if (quickFilter === 'ARRIVING_TODAY') params.set('arrivingOn', today);
+    if (quickFilter === 'DEPARTING_TODAY') params.set('departingOn', today);
     apiFetch<{ items: Booking[]; total: number }>(`/bookings?${params.toString()}`)
       .then((res) => {
         setBookings(res.items);
@@ -294,7 +308,7 @@ export default function BookingsPage() {
   useEffect(() => {
     if (ready) reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, hotelId, status, search, page]);
+  }, [ready, hotelId, status, search, quickFilter, page]);
 
   async function handleCancel(id: string) {
     if (!confirm('Cancel this booking?')) return;
@@ -347,6 +361,7 @@ export default function BookingsPage() {
           value={status}
           onChange={(e) => {
             setStatus(e.target.value);
+            setQuickFilter(null);
             setPage(1);
           }}
           className="w-44"
@@ -355,6 +370,31 @@ export default function BookingsPage() {
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </Select>
+
+        <span className="mx-1 h-6 w-px shrink-0 bg-slate-200" />
+
+        <button
+          type="button"
+          onClick={() => toggleQuickFilter('ARRIVING_TODAY')}
+          className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+            quickFilter === 'ARRIVING_TODAY'
+              ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+              : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+          }`}
+        >
+          <LogIn className="h-4 w-4" /> Check-in Today
+        </button>
+        <button
+          type="button"
+          onClick={() => toggleQuickFilter('DEPARTING_TODAY')}
+          className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+            quickFilter === 'DEPARTING_TODAY'
+              ? 'border-sky-300 bg-sky-50 text-sky-700'
+              : 'border-slate-300 text-slate-700 hover:bg-slate-50'
+          }`}
+        >
+          <LogOut className="h-4 w-4" /> Check-out Today
+        </button>
       </Card>
 
       {showCreateForm && (
@@ -385,8 +425,16 @@ export default function BookingsPage() {
       ) : bookings.length === 0 ? (
         <EmptyState
           icon={<CalendarRange className="h-8 w-8" />}
-          title={status || search ? 'No bookings match these filters' : 'No bookings yet'}
-          description={status || search ? 'Try a different search or status.' : 'Create your first booking to see it here.'}
+          title={status || search || quickFilter ? 'No bookings match these filters' : 'No bookings yet'}
+          description={
+            quickFilter === 'ARRIVING_TODAY'
+              ? 'No guests are checking in today.'
+              : quickFilter === 'DEPARTING_TODAY'
+                ? 'No guests are checking out today.'
+                : status || search
+                  ? 'Try a different search or status.'
+                  : 'Create your first booking to see it here.'
+          }
         />
       ) : (
         <Card className="overflow-hidden">
@@ -407,7 +455,12 @@ export default function BookingsPage() {
                 const editable = b.status === 'CONFIRMED';
                 return (
                   <tr key={b.id} className="hover:bg-slate-50">
-                    <td className="px-5 py-3 font-medium text-slate-900">{b.guest.fullName}</td>
+                    <td className="px-5 py-3 font-medium text-slate-900">
+                      <span className="flex items-center gap-1.5">
+                        {b.guest.fullName}
+                        <GuestBadges guest={b.guest} />
+                      </span>
+                    </td>
                     <td className="px-5 py-3 text-slate-600">{b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}</td>
                     <td className="px-5 py-3 text-slate-600">{b.bookingRooms.map((br) => br.occupants).join(', ')}</td>
                     <td className="px-5 py-3 text-slate-600">{b.checkInDate.slice(0, 10)}</td>

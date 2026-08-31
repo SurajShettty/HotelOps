@@ -41,7 +41,13 @@ export class CheckoutService {
 
     const nights = differenceInCalendarDays(actualCheckOut, booking.checkInDate);
     const roomSubtotal = booking.bookingRooms.reduce((sum, br) => sum + Number(br.rateApplied) * nights, 0);
-    const chargesTotal = additionalCharges.reduce((sum, c) => sum + c.amount, 0);
+
+    // Incidentals logged during the stay (see RoomChargesModule) are folded
+    // into the same total as any one-off charge typed in at checkout — the
+    // receptionist doesn't need to re-enter what housekeeping already logged.
+    const loggedCharges = await client.roomCharge.findMany({ where: { bookingId } });
+    const loggedChargesTotal = loggedCharges.reduce((sum, c) => sum + Number(c.amount), 0);
+    const chargesTotal = loggedChargesTotal + additionalCharges.reduce((sum, c) => sum + c.amount, 0);
     const discountTotal = discounts.reduce((sum, d) => sum + d.amount, 0);
 
     const subtotal = roomSubtotal + chargesTotal - discountTotal;

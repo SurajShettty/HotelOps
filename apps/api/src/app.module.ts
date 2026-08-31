@@ -13,6 +13,8 @@ import { CheckoutModule } from './modules/checkout/checkout.module';
 import { HousekeepingModule } from './modules/housekeeping/housekeeping.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { ReportsModule } from './modules/reports/reports.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { RoomChargesModule } from './modules/room-charges/room-charges.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -31,6 +33,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     HousekeepingModule,
     PaymentsModule,
     ReportsModule,
+    DashboardModule,
+    RoomChargesModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

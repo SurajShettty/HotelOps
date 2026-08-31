@@ -1,7 +1,9 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { GuestsService } from './guests.service';
 import { CreateGuestDto } from './dto/create-guest.dto';
 import { UpdateGuestDto } from './dto/update-guest.dto';
+import { FlagGuestDto } from './dto/flag-guest.dto';
 
 @Controller('guests')
 export class GuestsController {
@@ -30,5 +32,15 @@ export class GuestsController {
   @Patch(':id')
   update(@Param('id') id: string, @Body() dto: UpdateGuestDto) {
     return this.guestsService.update(id, dto);
+  }
+
+  @Post(':id/flag')
+  flag(@Param('id') id: string, @Body() dto: FlagGuestDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.guestsService.flag(id, dto, user.id);
+  }
+
+  @Post(':id/unflag')
+  unflag(@Param('id') id: string) {
+    return this.guestsService.unflag(id);
   }
 }

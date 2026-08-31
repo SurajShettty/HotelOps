@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizePagination } from '../../common/pagination';
+import { GUEST_LOYALTY_INCLUDE, withGuestLoyaltyBadge } from '../guests/guest-loyalty';
 
 @Injectable()
 export class ReportsService {
@@ -30,20 +31,32 @@ export class ReportsService {
     const { page: p, pageSize: ps, skip, take } = normalizePagination(page, pageSize);
     const where = { hotelId, checkInDate: { gte: from, lt: to } };
     const [items, total] = await Promise.all([
-      this.prisma.booking.findMany({ where, skip, take, include: { guest: true, bookingRooms: true }, orderBy: { checkInDate: 'asc' } }),
+      this.prisma.booking.findMany({
+        where,
+        skip,
+        take,
+        include: { guest: { include: GUEST_LOYALTY_INCLUDE }, bookingRooms: true },
+        orderBy: { checkInDate: 'asc' },
+      }),
       this.prisma.booking.count({ where }),
     ]);
-    return { items, total, page: p, pageSize: ps };
+    return { items: items.map(withGuestLoyaltyBadge), total, page: p, pageSize: ps };
   }
 
   async cancellations(hotelId: string, from: Date, to: Date, page?: string, pageSize?: string) {
     const { page: p, pageSize: ps, skip, take } = normalizePagination(page, pageSize);
     const where = { hotelId, status: { in: ['CANCELLED', 'NO_SHOW'] } as never, checkInDate: { gte: from, lt: to } };
     const [items, total] = await Promise.all([
-      this.prisma.booking.findMany({ where, skip, take, include: { guest: true }, orderBy: { checkInDate: 'asc' } }),
+      this.prisma.booking.findMany({
+        where,
+        skip,
+        take,
+        include: { guest: { include: GUEST_LOYALTY_INCLUDE } },
+        orderBy: { checkInDate: 'asc' },
+      }),
       this.prisma.booking.count({ where }),
     ]);
-    return { items, total, page: p, pageSize: ps };
+    return { items: items.map(withGuestLoyaltyBadge), total, page: p, pageSize: ps };
   }
 
   async housekeeping(hotelId: string, from: Date, to: Date, page?: string, pageSize?: string) {

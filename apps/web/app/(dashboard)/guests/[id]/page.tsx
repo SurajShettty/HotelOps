@@ -2,11 +2,12 @@
 
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft } from 'lucide-react';
+import { AlertTriangle, ArrowLeft } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { Button, Card, ErrorBanner, Input, Label } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { GuestLoyaltyBadge, GuestLoyaltyTier } from '@/components/ui/guest-loyalty-badge';
+import { GuestFlagBadge } from '@/components/ui/guest-flag-badge';
 
 interface Booking {
   id: string;
@@ -24,6 +25,10 @@ interface GuestDetail {
   bookings: Booking[];
   bookingsCount: number;
   loyaltyBadge: { tier: GuestLoyaltyTier; label: string } | null;
+  isFlagged: boolean;
+  flagReason: string | null;
+  flaggedAt: string | null;
+  flaggedBy: { fullName: string } | null;
 }
 
 export default function GuestDetailPage() {
@@ -35,6 +40,8 @@ export default function GuestDetailPage() {
   const [saving, setSaving] = useState(false);
 
   const [notes, setNotes] = useState('');
+  const [flagReason, setFlagReason] = useState('');
+  const [flagging, setFlagging] = useState(false);
 
   useEffect(() => {
     apiFetch<GuestDetail>(`/guests/${params.id}`)
@@ -62,6 +69,38 @@ export default function GuestDetailPage() {
     }
   }
 
+  async function handleFlag() {
+    if (!flagReason.trim()) return;
+    setFlagging(true);
+    setError(null);
+    try {
+      const updated = await apiFetch<GuestDetail>(`/guests/${params.id}/flag`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: flagReason.trim() }),
+      });
+      setGuest(updated);
+      setFlagReason('');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to flag guest');
+    } finally {
+      setFlagging(false);
+    }
+  }
+
+  async function handleUnflag() {
+    if (!confirm('Remove this flag?')) return;
+    setFlagging(true);
+    setError(null);
+    try {
+      const updated = await apiFetch<GuestDetail>(`/guests/${params.id}/unflag`, { method: 'POST' });
+      setGuest(updated);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to remove flag');
+    } finally {
+      setFlagging(false);
+    }
+  }
+
   if (loading) return <p className="text-sm text-slate-400">Loading…</p>;
   if (error && !guest) return <div><ErrorBanner>{error}</ErrorBanner></div>;
   if (!guest) return null;
@@ -80,6 +119,7 @@ export default function GuestDetailPage() {
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{guest.fullName}</h1>
             <GuestLoyaltyBadge badge={guest.loyaltyBadge} />
+            <GuestFlagBadge isFlagged={guest.isFlagged} flagReason={guest.flagReason} />
           </div>
           <p className="text-sm text-slate-500">{guest.email ?? 'No email'} · {guest.phone ?? 'No phone'}</p>
         </div>
@@ -127,6 +167,44 @@ export default function GuestDetailPage() {
           <Button onClick={handleSaveNotes} disabled={saving} className="mt-3">
             {saving ? 'Saving…' : 'Save notes'}
           </Button>
+        </Card>
+
+        <Card className="p-5 md:col-span-3">
+          <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+            <AlertTriangle className="h-4 w-4 text-rose-500" /> Flag
+          </h2>
+          {guest.isFlagged ? (
+            <div className="space-y-2">
+              <p className="text-sm text-slate-700">{guest.flagReason}</p>
+              <p className="text-xs text-slate-400">
+                Flagged {guest.flaggedAt ? new Date(guest.flaggedAt).toLocaleDateString() : ''}
+                {guest.flaggedBy ? ` by ${guest.flaggedBy.fullName}` : ''}
+              </p>
+              <Button onClick={handleUnflag} disabled={flagging} variant="secondary">
+                {flagging ? 'Removing…' : 'Remove flag'}
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex-1 min-w-[16rem]">
+                <Label htmlFor="flag-reason">Reason (misbehavior, etc.)</Label>
+                <Input
+                  id="flag-reason"
+                  placeholder="e.g. Property damage on last stay"
+                  value={flagReason}
+                  onChange={(e) => setFlagReason(e.target.value)}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={handleFlag}
+                disabled={flagging || !flagReason.trim()}
+                className="inline-flex items-center justify-center rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {flagging ? 'Flagging…' : 'Flag guest'}
+              </button>
+            </div>
+          )}
         </Card>
       </div>
     </div>

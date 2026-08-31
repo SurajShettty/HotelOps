@@ -1,11 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
+import { StatusBadge } from '@/components/ui/status-badge';
+import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 
 const DAYS_SHOWN = 14;
 
@@ -23,10 +25,11 @@ interface Room {
 interface Booking {
   id: string;
   status: string;
+  source: string;
   checkInDate: string;
   checkOutDate: string;
-  guest: { fullName: string };
-  bookingRooms: { room: { id: string } }[];
+  guest: { fullName: string; email: string | null; phone: string | null } & GuestBadgeInfo;
+  bookingRooms: { occupants: number; room: { id: string; roomNumber: string } }[];
 }
 
 interface RoomBlock {
@@ -35,6 +38,7 @@ interface RoomBlock {
   reason: string;
   startDate: string;
   endDate: string;
+  notes: string | null;
 }
 
 interface Anchor {
@@ -208,6 +212,29 @@ function CellActionPopover({
   );
 }
 
+function nightsBetween(checkIn: string, checkOut: string) {
+  const ms = new Date(checkOut).getTime() - new Date(checkIn).getTime();
+  return Math.round(ms / (24 * 60 * 60 * 1000));
+}
+
+function formatDate(iso: string) {
+  return new Date(iso).toLocaleDateString(undefined, { day: '2-digit', month: 'short' });
+}
+
+// Read-only preview, pointer-events-none so it never steals the mouseleave that
+// would otherwise dismiss it — it just tracks whatever cell is being hovered.
+function HoverPreview({ anchor, children }: { anchor: Anchor; children: React.ReactNode }) {
+  return createPortal(
+    <div
+      style={{ top: anchor.top, left: anchor.left }}
+      className="pointer-events-none fixed z-50 w-72 space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
 export default function CalendarPage() {
   const { hotelId, ready } = useCurrentHotel();
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -221,9 +248,32 @@ export default function CalendarPage() {
     info: { kind: 'booking' | 'block'; id: string; label: string; status: string };
     anchor: Anchor;
   } | null>(null);
+  const [hoveredCell, setHoveredCell] = useState<{
+    cellKey: string;
+    kind: 'booking' | 'block';
+    id: string;
+    anchor: Anchor;
+  } | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const days = useMemo(() => Array.from({ length: DAYS_SHOWN }, (_, i) => addDays(startDate, i)), [startDate]);
   const { colors: roomTypeColors, types: roomTypes } = useRoomTypeColors(rooms);
+
+  // Small delay before showing the preview so it doesn't flash while the mouse
+  // is just passing through a row of cells on its way somewhere else.
+  function handleCellMouseEnter(e: React.MouseEvent<HTMLElement>, cellKey: string, kind: 'booking' | 'block', id: string) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const PREVIEW_WIDTH = 288;
+    const left = Math.min(rect.left, window.innerWidth - PREVIEW_WIDTH - 16);
+    const anchor = { top: rect.bottom + 6, left };
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHoveredCell({ cellKey, kind, id, anchor }), 200);
+  }
+
+  function handleCellMouseLeave() {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    setHoveredCell(null);
+  }
 
   function reload() {
     if (!hotelId) return;
@@ -351,14 +401,20 @@ export default function CalendarPage() {
                               : 'bg-sky-50 text-sky-700 ring-sky-200'
                         }`
                       : '';
+                    const isHovered = hoveredCell?.cellKey === cellKey && !isActionOpen;
                     return (
-                      <td key={iso} className="relative border-b border-slate-100 p-1 text-center">
+                      <td
+                        key={iso}
+                        className="relative border-b border-slate-100 p-1 text-center"
+                        onMouseEnter={info ? (e) => handleCellMouseEnter(e, cellKey, info.kind, info.id) : undefined}
+                        onMouseLeave={info ? handleCellMouseLeave : undefined}
+                      >
                         {info ? (
                           isActionable ? (
                             <button
                               type="button"
-                              title={`${info.label} — click for options`}
                               onClick={(e) => {
+                                handleCellMouseLeave();
                                 if (isActionOpen) {
                                   setActiveAction(null);
                                   return;
@@ -373,7 +429,7 @@ export default function CalendarPage() {
                               {info.label}
                             </button>
                           ) : (
-                            <div title={info.label} className={cellStyle}>
+                            <div className={cellStyle}>
                               {info.label}
                             </div>
                           )
@@ -417,6 +473,46 @@ export default function CalendarPage() {
                             }}
                           />
                         )}
+                        {isHovered && hoveredCell.kind === 'booking' && (() => {
+                          const booking = bookings.find((b) => b.id === hoveredCell.id);
+                          if (!booking) return null;
+                          return (
+                            <HoverPreview anchor={hoveredCell.anchor}>
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+                                  {booking.guest.fullName}
+                                  <GuestBadges guest={booking.guest} />
+                                </p>
+                                <StatusBadge status={booking.status} />
+                              </div>
+                              <p className="text-xs text-slate-500">
+                                {formatDate(booking.checkInDate)} → {formatDate(booking.checkOutDate)} · {nightsBetween(booking.checkInDate, booking.checkOutDate)} night(s)
+                              </p>
+                              <p className="text-xs text-slate-500">
+                                Room{booking.bookingRooms.length > 1 ? 's' : ''}:{' '}
+                                {booking.bookingRooms.map((br) => `${br.room.roomNumber} (${br.occupants})`).join(', ')}
+                              </p>
+                              {(booking.guest.email || booking.guest.phone) && (
+                                <p className="text-xs text-slate-500">{[booking.guest.email, booking.guest.phone].filter(Boolean).join(' · ')}</p>
+                              )}
+                              <p className="text-xs text-slate-400">Source: {booking.source}</p>
+                            </HoverPreview>
+                          );
+                        })()}
+                        {isHovered && hoveredCell.kind === 'block' && (() => {
+                          const block = blocks.find((bl) => bl.id === hoveredCell.id);
+                          if (!block) return null;
+                          return (
+                            <HoverPreview anchor={hoveredCell.anchor}>
+                              <p className="text-sm font-semibold text-slate-900">Room blocked</p>
+                              <p className="text-xs text-slate-500">Reason: {block.reason}</p>
+                              <p className="text-xs text-slate-500">
+                                {formatDate(block.startDate)} → {formatDate(block.endDate)}
+                              </p>
+                              {block.notes && <p className="text-xs text-slate-500">{block.notes}</p>}
+                            </HoverPreview>
+                          );
+                        })()}
                       </td>
                     );
                   })}

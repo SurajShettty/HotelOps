@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Search, UserPlus } from 'lucide-react';
+import { AlertTriangle, Search, UserPlus } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { Input, Label } from './primitives';
+import { GuestLoyaltyBadge, GuestLoyaltyTier } from './guest-loyalty-badge';
+import { GuestFlagBadge } from './guest-flag-badge';
 
 export interface PickedGuest {
   id: string | null; // null = not linked to an existing record; create one from these fields on submit
@@ -17,6 +19,9 @@ interface GuestOption {
   fullName: string;
   email: string | null;
   phone: string | null;
+  loyaltyBadge: { tier: GuestLoyaltyTier; label: string } | null;
+  isFlagged: boolean;
+  flagReason: string | null;
 }
 
 export function GuestPicker({
@@ -34,6 +39,8 @@ export function GuestPicker({
   const [results, setResults] = useState<GuestOption[]>([]);
   const [open, setOpen] = useState(false);
   const [searching, setSearching] = useState(false);
+  const [selectedBadge, setSelectedBadge] = useState<{ tier: GuestLoyaltyTier; label: string } | null>(null);
+  const [selectedFlag, setSelectedFlag] = useState<{ isFlagged: boolean; flagReason: string | null }>({ isFlagged: false, flagReason: null });
   const containerRef = useRef<HTMLDivElement>(null);
 
   const isExisting = !!value?.id;
@@ -64,6 +71,8 @@ export function GuestPicker({
 
   function handleInputChange(v: string) {
     setQuery(v);
+    setSelectedBadge(null);
+    setSelectedFlag({ isFlagged: false, flagReason: null });
     onChange({ id: null, fullName: v, email, phone });
     setOpen(true);
   }
@@ -72,6 +81,8 @@ export function GuestPicker({
     setQuery(guest.fullName);
     setEmail(guest.email ?? '');
     setPhone(guest.phone ?? '');
+    setSelectedBadge(guest.loyaltyBadge);
+    setSelectedFlag({ isFlagged: guest.isFlagged, flagReason: guest.flagReason });
     onChange({ id: guest.id, fullName: guest.fullName, email: guest.email ?? '', phone: guest.phone ?? '' });
     setResults([]);
     setOpen(false);
@@ -110,7 +121,21 @@ export function GuestPicker({
             className="pl-9"
           />
         </div>
-        {isExisting && <p className="mt-1 text-xs text-emerald-600">Using existing guest — history and notes carry over.</p>}
+        {isExisting && (
+          <div className="mt-1 flex items-center gap-2">
+            <p className="text-xs text-emerald-600">Using existing guest — history and notes carry over.</p>
+            <GuestLoyaltyBadge badge={selectedBadge} />
+            <GuestFlagBadge isFlagged={selectedFlag.isFlagged} flagReason={selectedFlag.flagReason} />
+          </div>
+        )}
+        {isExisting && selectedFlag.isFlagged && (
+          <div className="mt-2 flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 p-2.5 text-xs text-rose-700">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              <span className="font-medium">This guest was flagged:</span> {selectedFlag.flagReason}
+            </span>
+          </div>
+        )}
 
         {showDropdown && (
           <div className="absolute left-0 top-full z-50 mt-1 w-full rounded-lg border border-slate-200 bg-white py-1 shadow-popover">
@@ -125,7 +150,11 @@ export function GuestPicker({
                     onClick={() => selectExisting(g)}
                     className="flex w-full flex-col items-start px-3 py-2 text-left text-sm hover:bg-slate-50"
                   >
-                    <span className="font-medium text-slate-900">{g.fullName}</span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="font-medium text-slate-900">{g.fullName}</span>
+                      <GuestLoyaltyBadge badge={g.loyaltyBadge} />
+                      <GuestFlagBadge isFlagged={g.isFlagged} flagReason={g.flagReason} />
+                    </span>
                     {(g.email || g.phone) && (
                       <span className="text-xs text-slate-400">{[g.email, g.phone].filter(Boolean).join(' · ')}</span>
                     )}
