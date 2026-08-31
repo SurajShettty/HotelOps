@@ -1,0 +1,298 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// btree_gist is enabled by the manual migration in
+// prisma/manual-sql/001_exclusion_constraints.sql, not here —
+// Prisma's postgresqlExtensions preview feature isn't needed for this schema.
+
+// ---------- Enums ----------
+
+enum RoleName {
+  SUPER_ADMIN
+  OWNER
+  MANAGER
+  RECEPTIONIST
+  HOUSEKEEPING
+  FINANCE
+}
+
+enum RoomStatus {
+  AVAILABLE
+  OCCUPIED
+  DIRTY
+  OUT_OF_ORDER
+}
+
+enum BookingStatus {
+  DRAFT
+  CONFIRMED
+  CHECKED_IN
+  CHECKED_OUT
+  CANCELLED
+  NO_SHOW
+  COMPLETED
+}
+
+enum BookingSource {
+  DIRECT
+  PHONE
+  WALK_IN
+  OTA
+}
+
+enum RoomBlockReason {
+  MAINTENANCE
+  RENOVATION
+  VIP
+  INTERNAL
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  UPI
+}
+
+enum PaymentType {
+  CHARGE
+  REFUND
+}
+
+enum HousekeepingStatus {
+  DIRTY
+  IN_PROGRESS
+  INSPECTED
+  READY
+}
+
+// ---------- Models ----------
+
+model Hotel {
+  id        String   @id @default(uuid())
+  name      String
+  timezone  String   @default("Asia/Kolkata")
+  address   Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  rooms           Room[]
+  roomTypes       RoomType[]
+  guests          Guest[]
+  bookings        Booking[]
+  userHotelRoles  UserHotelRole[]
+  auditLogs       AuditLog[]
+
+  @@map("hotels")
+}
+
+model Role {
+  id   String   @id @default(uuid())
+  name RoleName @unique
+
+  userHotelRoles UserHotelRole[]
+
+  @@map("roles")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  fullName     String   @map("full_name")
+  phone        String?
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  userHotelRoles     UserHotelRole[]
+  bookingsCreated    Booking[]            @relation("BookingCreatedBy")
+  roomBlocksCreated  RoomBlock[]
+  housekeepingTasks  HousekeepingTask[]
+  auditLogs          AuditLog[]
+
+  @@map("users")
+}
+
+model UserHotelRole {
+  id      String  @id @default(uuid())
+  userId  String  @map("user_id")
+  // NULL hotelId = a platform-wide role (SUPER_ADMIN). Every other role is scoped to one hotel.
+  hotelId String? @map("hotel_id")
+  roleId  String  @map("role_id")
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hotel Hotel? @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  role  Role   @relation(fields: [roleId], references: [id])
+
+  @@unique([userId, hotelId, roleId])
+  @@map("user_hotel_roles")
+}
+
+model RoomType {
+  id            String @id @default(uuid())
+  hotelId       String @map("hotel_id")
+  name          String
+  baseOccupancy Int    @default(2) @map("base_occupancy")
+  maxOccupancy  Int    @default(3) @map("max_occupancy")
+  baseRate      Decimal @map("base_rate") @db.Decimal(10, 2)
+  amenities     Json   @default("[]")
+
+  hotel Hotel  @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  rooms Room[]
+
+  @@unique([hotelId, name])
+  @@map("room_types")
+}
+
+model Room {
+  id         String     @id @default(uuid())
+  hotelId    String     @map("hotel_id")
+  roomTypeId String     @map("room_type_id")
+  roomNumber String     @map("room_number")
+  floor      String?
+  status     RoomStatus @default(AVAILABLE)
+
+  hotel             Hotel              @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomType          RoomType           @relation(fields: [roomTypeId], references: [id])
+  bookingRooms      BookingRoom[]
+  roomBlocks        RoomBlock[]
+  housekeepingTasks HousekeepingTask[]
+
+  @@unique([hotelId, roomNumber])
+  @@map("rooms")
+}
+
+model Guest {
+  id               String   @id @default(uuid())
+  hotelId          String   @map("hotel_id")
+  fullName         String   @map("full_name")
+  email            String?
+  phone            String?
+  idDocumentType   String?  @map("id_document_type")
+  idDocumentNumber String?  @map("id_document_number")
+  notes            String?
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  hotel    Hotel     @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  bookings Booking[]
+
+  @@map("guests")
+}
+
+model Booking {
+  id            String        @id @default(uuid())
+  hotelId       String        @map("hotel_id")
+  guestId       String        @map("guest_id")
+  status        BookingStatus @default(DRAFT)
+  source        BookingSource @default(DIRECT)
+  checkInDate   DateTime      @map("check_in_date") @db.Date
+  checkOutDate  DateTime      @map("check_out_date") @db.Date
+  createdById   String        @map("created_by")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  hotel         Hotel         @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  guest         Guest         @relation(fields: [guestId], references: [id])
+  createdBy     User          @relation("BookingCreatedBy", fields: [createdById], references: [id])
+  bookingRooms  BookingRoom[]
+  payments      Payment[]
+  invoice       Invoice?
+
+  @@index([hotelId, checkInDate, checkOutDate])
+  @@map("bookings")
+}
+
+model BookingRoom {
+  id          String  @id @default(uuid())
+  bookingId   String  @map("booking_id")
+  roomId      String  @map("room_id")
+  rateApplied Decimal @map("rate_applied") @db.Decimal(10, 2)
+  occupants   Int     @default(1) @map("occupants")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  room    Room    @relation(fields: [roomId], references: [id])
+
+  @@unique([roomId, bookingId])
+  @@map("booking_rooms")
+}
+
+model RoomBlock {
+  id        String          @id @default(uuid())
+  roomId    String          @map("room_id")
+  reason    RoomBlockReason
+  startDate DateTime        @map("start_date") @db.Date
+  endDate   DateTime        @map("end_date") @db.Date
+  notes     String?
+  createdById String        @map("created_by")
+
+  room      Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  createdBy User @relation(fields: [createdById], references: [id])
+
+  @@map("room_blocks")
+}
+
+model Payment {
+  id        String        @id @default(uuid())
+  bookingId String        @map("booking_id")
+  amount    Decimal       @db.Decimal(10, 2)
+  method    PaymentMethod
+  type      PaymentType   @default(CHARGE)
+  reference String?
+  createdAt DateTime      @default(now()) @map("created_at")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("payments")
+}
+
+model Invoice {
+  id             String   @id @default(uuid())
+  bookingId      String   @unique @map("booking_id")
+  subtotal       Decimal  @db.Decimal(10, 2)
+  taxTotal       Decimal  @map("tax_total") @db.Decimal(10, 2)
+  discountTotal  Decimal  @default(0) @map("discount_total") @db.Decimal(10, 2)
+  grandTotal     Decimal  @map("grand_total") @db.Decimal(10, 2)
+  pdfUrl         String?  @map("pdf_url")
+  issuedAt       DateTime @default(now()) @map("issued_at")
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@map("invoices")
+}
+
+model HousekeepingTask {
+  id          String             @id @default(uuid())
+  roomId      String             @map("room_id")
+  status      HousekeepingStatus @default(DIRTY)
+  assignedToId String?           @map("assigned_to")
+  priority    Int                @default(0)
+  createdAt   DateTime           @default(now()) @map("created_at")
+  completedAt DateTime?          @map("completed_at")
+
+  room       Room  @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  assignedTo User? @relation(fields: [assignedToId], references: [id])
+
+  @@index([status, priority])
+  @@map("housekeeping_tasks")
+}
+
+model AuditLog {
+  id        String   @id @default(uuid())
+  hotelId   String?  @map("hotel_id")
+  actorId   String?  @map("actor_id")
+  entity    String
+  entityId  String   @map("entity_id")
+  action    String
+  diff      Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  hotel Hotel? @relation(fields: [hotelId], references: [id])
+  actor User?  @relation(fields: [actorId], references: [id])
+
+  @@index([entity, entityId])
+  @@map("audit_logs")
+}
