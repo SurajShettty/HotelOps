@@ -34,7 +34,15 @@ export class RoomTypesController {
   @Patch(':id')
   update(
     @Param('id') id: string,
-    @Body() body: { hotelId: string; name?: string; baseRate?: number; baseOccupancy?: number; maxOccupancy?: number },
+    @Body()
+    body: {
+      hotelId: string;
+      name?: string;
+      baseRate?: number;
+      baseOccupancy?: number;
+      maxOccupancy?: number;
+      amenities?: Prisma.InputJsonValue;
+    },
   ) {
     const { hotelId: _hotelId, ...data } = body;
     return this.roomTypesService.update(id, data);

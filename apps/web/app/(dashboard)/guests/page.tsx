@@ -7,6 +7,7 @@ import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
 import { Pagination } from '@/components/ui/pagination';
+import { GuestLoyaltyBadge, GuestLoyaltyTier } from '@/components/ui/guest-loyalty-badge';
 
 const PAGE_SIZE = 10;
 
@@ -16,6 +17,8 @@ interface Guest {
   email: string | null;
   phone: string | null;
   notes: string | null;
+  bookingsCount: number;
+  loyaltyBadge: { tier: GuestLoyaltyTier; label: string } | null;
 }
 
 export default function GuestsPage() {
@@ -67,7 +70,7 @@ export default function GuestsPage() {
     try {
       await apiFetch('/guests', {
         method: 'POST',
-        body: JSON.stringify({ hotelId, fullName, email: email || undefined, phone: phone || undefined }),
+        body: JSON.stringify({ hotelId, fullName, email, phone }),
       });
       setFullName('');
       setEmail('');
@@ -120,11 +123,11 @@ export default function GuestsPage() {
             </div>
             <div>
               <Label htmlFor="guest-email">Email</Label>
-              <Input id="guest-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+              <Input id="guest-email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
             <div>
               <Label htmlFor="guest-phone">Phone</Label>
-              <Input id="guest-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+              <Input id="guest-phone" required value={phone} onChange={(e) => setPhone(e.target.value)} />
             </div>
             <div className="sm:col-span-3">
               <Button type="submit" disabled={submitting}>{submitting ? 'Adding…' : 'Add Guest'}</Button>
@@ -149,18 +152,23 @@ export default function GuestsPage() {
                 <th className="px-5 py-3">Name</th>
                 <th className="px-5 py-3">Email</th>
                 <th className="px-5 py-3">Phone</th>
+                <th className="px-5 py-3">Bookings</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {guests.map((g) => (
                 <tr key={g.id} className="hover:bg-slate-50">
                   <td className="px-5 py-3">
-                    <Link href={`/guests/${g.id}`} className="font-medium text-brand-700 hover:underline">
-                      {g.fullName}
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      <Link href={`/guests/${g.id}`} className="font-medium text-brand-700 hover:underline">
+                        {g.fullName}
+                      </Link>
+                      <GuestLoyaltyBadge badge={g.loyaltyBadge} />
+                    </div>
                   </td>
                   <td className="px-5 py-3 text-slate-600">{g.email ?? '—'}</td>
                   <td className="px-5 py-3 text-slate-600">{g.phone ?? '—'}</td>
+                  <td className="px-5 py-3 text-slate-600">{g.bookingsCount}</td>
                 </tr>
               ))}
             </tbody>

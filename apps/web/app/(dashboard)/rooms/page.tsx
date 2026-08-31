@@ -6,6 +6,7 @@ import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { AmenitiesEditor, AmenitiesList } from '@/components/ui/amenities';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -21,6 +22,7 @@ interface RoomType {
   baseRate: string;
   baseOccupancy: number;
   maxOccupancy: number;
+  amenities: unknown;
 }
 
 interface Room {
@@ -41,6 +43,7 @@ export default function RoomsPage() {
   const [newTypeRate, setNewTypeRate] = useState('');
   const [newTypeBaseOccupancy, setNewTypeBaseOccupancy] = useState('2');
   const [newTypeMaxOccupancy, setNewTypeMaxOccupancy] = useState('3');
+  const [newTypeAmenities, setNewTypeAmenities] = useState<string[]>([]);
   const [newRoomNumber, setNewRoomNumber] = useState('');
   const [newRoomTypeId, setNewRoomTypeId] = useState('');
 
@@ -82,12 +85,14 @@ export default function RoomsPage() {
           baseRate: Number(newTypeRate),
           baseOccupancy: Number(newTypeBaseOccupancy),
           maxOccupancy: Number(newTypeMaxOccupancy),
+          amenities: newTypeAmenities,
         }),
       });
       setNewTypeName('');
       setNewTypeRate('');
       setNewTypeBaseOccupancy('2');
       setNewTypeMaxOccupancy('3');
+      setNewTypeAmenities([]);
       reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to create room type');
@@ -155,6 +160,10 @@ export default function RoomsPage() {
                 />
               </div>
             </div>
+            <div>
+              <Label htmlFor="type-amenities">Amenities</Label>
+              <AmenitiesEditor id="type-amenities" amenities={newTypeAmenities} onChange={setNewTypeAmenities} />
+            </div>
             <Button type="submit">Add Room Type</Button>
           </form>
         </Card>
@@ -214,6 +223,7 @@ export default function RoomsPage() {
                   <th className="px-5 py-3">Type</th>
                   <th className="px-5 py-3">Rate</th>
                   <th className="px-5 py-3">Capacity</th>
+                  <th className="px-5 py-3">Amenities</th>
                   <th className="px-5 py-3">Status</th>
                 </tr>
               </thead>
@@ -226,6 +236,7 @@ export default function RoomsPage() {
                     <td className="px-5 py-3 text-slate-600">
                       {r.roomType.baseOccupancy}–{r.roomType.maxOccupancy} guests
                     </td>
+                    <td className="px-5 py-3"><AmenitiesList amenities={r.roomType.amenities} /></td>
                     <td className="px-5 py-3"><StatusBadge status={r.status} /></td>
                   </tr>
                 ))}

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RoomBlocksService } from './room-blocks.service';
@@ -21,5 +21,13 @@ export class RoomBlocksController {
   @Get()
   findAllForRoom(@Query('roomId') roomId: string) {
     return this.roomBlocksService.findAllForRoom(roomId);
+  }
+
+  // `hotelId` is read as a query param purely for RolesGuard scoping (RoomBlock
+  // has no hotelId column of its own) — same convention as the POST route above.
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')
+  @Delete(':id')
+  remove(@Param('id') id: string, @Query('hotelId') _hotelId: string) {
+    return this.roomBlocksService.remove(id);
   }
 }

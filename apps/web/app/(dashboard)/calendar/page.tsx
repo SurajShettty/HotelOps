@@ -9,12 +9,19 @@ import { Button, Card, ErrorBanner, Input, Label, PageHeader, Select } from '@/c
 
 const DAYS_SHOWN = 14;
 
+interface RoomType {
+  id: string;
+  name: string;
+}
+
 interface Room {
   id: string;
   roomNumber: string;
+  roomType: RoomType;
 }
 
 interface Booking {
+  id: string;
   status: string;
   checkInDate: string;
   checkOutDate: string;
@@ -43,6 +50,28 @@ function addDays(d: Date, n: number) {
   const copy = new Date(d);
   copy.setDate(copy.getDate() + n);
   return copy;
+}
+
+// Cycled per distinct room type (sorted by name) so the same type always gets the same color for a given hotel's type list.
+const ROOM_TYPE_COLORS = [
+  'bg-violet-400',
+  'bg-cyan-400',
+  'bg-rose-400',
+  'bg-lime-500',
+  'bg-orange-400',
+  'bg-fuchsia-400',
+  'bg-teal-400',
+  'bg-indigo-400',
+];
+
+function useRoomTypeColors(rooms: Room[]) {
+  return useMemo(() => {
+    const types = Array.from(new Map(rooms.map((r) => [r.roomType.id, r.roomType.name])).entries())
+      .sort((a, b) => a[1].localeCompare(b[1]));
+    const colors = new Map<string, string>();
+    types.forEach(([id], i) => colors.set(id, ROOM_TYPE_COLORS[i % ROOM_TYPE_COLORS.length]));
+    return { colors, types };
+  }, [rooms]);
 }
 
 function BlockForm({
@@ -118,6 +147,67 @@ function BlockForm({
   );
 }
 
+function CellActionPopover({
+  hotelId,
+  info,
+  anchor,
+  onDone,
+  onCancel,
+}: {
+  hotelId: string;
+  info: { kind: 'booking' | 'block'; id: string; label: string; status: string };
+  anchor: Anchor;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  async function handleRemove() {
+    const confirmMessage = info.kind === 'booking' ? 'Cancel this booking?' : 'Remove this block?';
+    if (!confirm(confirmMessage)) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      if (info.kind === 'booking') {
+        await apiFetch(`/bookings/${info.id}/cancel`, { method: 'POST' });
+      } else {
+        await apiFetch(`/rooms/block/${info.id}?hotelId=${hotelId}`, { method: 'DELETE' });
+      }
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : `Failed to ${info.kind === 'booking' ? 'cancel booking' : 'remove block'}`);
+      setSubmitting(false);
+    }
+  }
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40" onClick={onCancel} />
+      <div
+        style={{ top: anchor.top, left: anchor.left }}
+        className="fixed z-50 w-64 space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
+      >
+        {error && <ErrorBanner>{error}</ErrorBanner>}
+        <p className="text-xs font-medium text-slate-500">{info.kind === 'booking' ? 'Booking' : 'Block'}</p>
+        <p className="text-sm font-medium text-slate-900">{info.label}</p>
+        <div className="flex gap-2 pt-1">
+          <button
+            type="button"
+            onClick={handleRemove}
+            disabled={submitting}
+            className="inline-flex items-center justify-center rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-rose-700 disabled:opacity-50"
+          >
+            {submitting ? 'Working…' : info.kind === 'booking' ? 'Cancel booking' : 'Remove block'}
+          </button>
+          <button type="button" onClick={onCancel} className="text-xs text-slate-400 hover:text-slate-700">Close</button>
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 export default function CalendarPage() {
   const { hotelId, ready } = useCurrentHotel();
   const [rooms, setRooms] = useState<Room[]>([]);
@@ -126,8 +216,14 @@ export default function CalendarPage() {
   const [loading, setLoading] = useState(true);
   const [startDate, setStartDate] = useState(() => new Date(new Date().toDateString()));
   const [activeCell, setActiveCell] = useState<{ roomId: string; date: string; anchor: Anchor } | null>(null);
+  const [activeAction, setActiveAction] = useState<{
+    cellKey: string;
+    info: { kind: 'booking' | 'block'; id: string; label: string; status: string };
+    anchor: Anchor;
+  } | null>(null);
 
   const days = useMemo(() => Array.from({ length: DAYS_SHOWN }, (_, i) => addDays(startDate, i)), [startDate]);
+  const { colors: roomTypeColors, types: roomTypes } = useRoomTypeColors(rooms);
 
   function reload() {
     if (!hotelId) return;
@@ -162,10 +258,10 @@ export default function CalendarPage() {
         iso >= b.checkInDate.slice(0, 10) &&
         iso < b.checkOutDate.slice(0, 10),
     );
-    if (booking) return { kind: 'booking' as const, label: booking.guest.fullName, status: booking.status };
+    if (booking) return { kind: 'booking' as const, id: booking.id, label: booking.guest.fullName, status: booking.status };
 
     const block = blocks.find((bl) => bl.roomId === roomId && iso >= bl.startDate.slice(0, 10) && iso < bl.endDate.slice(0, 10));
-    if (block) return { kind: 'block' as const, label: block.reason, status: block.reason };
+    if (block) return { kind: 'block' as const, id: block.id, label: block.reason, status: block.reason };
 
     return null;
   }
@@ -193,12 +289,22 @@ export default function CalendarPage() {
         }
       />
 
-      <div className="mb-4 flex flex-wrap gap-4 text-xs text-slate-500">
+      <div className="mb-2 flex flex-wrap gap-4 text-xs text-slate-500">
         <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded bg-sky-100 ring-1 ring-sky-300" /> Confirmed</span>
         <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded bg-emerald-100 ring-1 ring-emerald-300" /> Checked in</span>
         <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded bg-amber-100 ring-1 ring-amber-300" /> Blocked</span>
         <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded bg-white ring-1 ring-slate-300" /> Available (click to block)</span>
       </div>
+      {roomTypes.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-4 text-xs text-slate-500">
+          <span className="text-slate-400">Room type:</span>
+          {roomTypes.map(([id, name]) => (
+            <span key={id} className="flex items-center gap-1.5">
+              <span className={`h-2.5 w-2.5 rounded-full ${roomTypeColors.get(id)}`} /> {name}
+            </span>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <p className="text-sm text-slate-400">Loading…</p>
@@ -221,27 +327,56 @@ export default function CalendarPage() {
               {rooms.map((room) => (
                 <tr key={room.id}>
                   <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-white px-3 py-2 font-medium text-slate-900">
-                    {room.roomNumber}
+                    <span className="flex items-center gap-2">
+                      <span
+                        title={room.roomType.name}
+                        className={`h-2.5 w-2.5 shrink-0 rounded-full ${roomTypeColors.get(room.roomType.id)}`}
+                      />
+                      {room.roomNumber}
+                    </span>
                   </td>
                   {days.map((d) => {
                     const iso = toDateOnly(d);
                     const info = cellInfo(room.id, d);
+                    const cellKey = `${room.id}:${iso}`;
                     const isActive = activeCell?.roomId === room.id && activeCell?.date === iso;
+                    const isActionable = !!info && (info.kind === 'block' || info.status === 'CONFIRMED');
+                    const isActionOpen = activeAction?.cellKey === cellKey;
+                    const cellStyle = info
+                      ? `truncate rounded px-1 py-1.5 text-[10px] font-medium ring-1 ring-inset ${
+                          info.kind === 'block'
+                            ? 'bg-amber-50 text-amber-700 ring-amber-200'
+                            : info.status === 'CHECKED_IN'
+                              ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
+                              : 'bg-sky-50 text-sky-700 ring-sky-200'
+                        }`
+                      : '';
                     return (
                       <td key={iso} className="relative border-b border-slate-100 p-1 text-center">
                         {info ? (
-                          <div
-                            title={info.label}
-                            className={`truncate rounded px-1 py-1.5 text-[10px] font-medium ring-1 ring-inset ${
-                              info.kind === 'block'
-                                ? 'bg-amber-50 text-amber-700 ring-amber-200'
-                                : info.status === 'CHECKED_IN'
-                                  ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-                                  : 'bg-sky-50 text-sky-700 ring-sky-200'
-                            }`}
-                          >
-                            {info.label}
-                          </div>
+                          isActionable ? (
+                            <button
+                              type="button"
+                              title={`${info.label} — click for options`}
+                              onClick={(e) => {
+                                if (isActionOpen) {
+                                  setActiveAction(null);
+                                  return;
+                                }
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const POPOVER_WIDTH = 256;
+                                const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
+                                setActiveAction({ cellKey, info, anchor: { top: rect.bottom + 4, left } });
+                              }}
+                              className={`w-full cursor-pointer ${cellStyle}`}
+                            >
+                              {info.label}
+                            </button>
+                          ) : (
+                            <div title={info.label} className={cellStyle}>
+                              {info.label}
+                            </div>
+                          )
                         ) : (
                           <button
                             onClick={(e) => {
@@ -266,6 +401,18 @@ export default function CalendarPage() {
                             onCancel={() => setActiveCell(null)}
                             onDone={() => {
                               setActiveCell(null);
+                              reload();
+                            }}
+                          />
+                        )}
+                        {isActionOpen && (
+                          <CellActionPopover
+                            hotelId={hotelId}
+                            info={activeAction.info}
+                            anchor={activeAction.anchor}
+                            onCancel={() => setActiveAction(null)}
+                            onDone={() => {
+                              setActiveAction(null);
                               reload();
                             }}
                           />

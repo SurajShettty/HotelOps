@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AvailabilityService } from '../rooms/availability.service';
 import { CreateRoomBlockDto } from './dto/create-room-block.dto';
@@ -39,5 +39,11 @@ export class RoomBlocksService {
 
   findAllForRoom(roomId: string) {
     return this.prisma.roomBlock.findMany({ where: { roomId }, orderBy: { startDate: 'asc' } });
+  }
+
+  async remove(id: string) {
+    const block = await this.prisma.roomBlock.findUnique({ where: { id } });
+    if (!block) throw new NotFoundException('Room block not found');
+    await this.prisma.roomBlock.delete({ where: { id } });
   }
 }

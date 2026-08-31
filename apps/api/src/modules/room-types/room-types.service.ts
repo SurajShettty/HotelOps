@@ -21,7 +21,16 @@ export class RoomTypesService {
     return this.prisma.roomType.create({ data });
   }
 
-  update(id: string, data: Partial<{ name: string; baseRate: number; baseOccupancy: number; maxOccupancy: number }>) {
+  update(
+    id: string,
+    data: Partial<{
+      name: string;
+      baseRate: number;
+      baseOccupancy: number;
+      maxOccupancy: number;
+      amenities: Prisma.InputJsonValue;
+    }>,
+  ) {
     return this.prisma.roomType.update({ where: { id }, data });
   }
 }

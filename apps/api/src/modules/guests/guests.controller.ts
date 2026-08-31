@@ -1,5 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { GuestsService } from './guests.service';
+import { CreateGuestDto } from './dto/create-guest.dto';
+import { UpdateGuestDto } from './dto/update-guest.dto';
 
 @Controller('guests')
 export class GuestsController {
@@ -21,23 +23,12 @@ export class GuestsController {
   }
 
   @Post()
-  create(
-    @Body()
-    body: {
-      hotelId: string;
-      fullName: string;
-      email?: string;
-      phone?: string;
-      idDocumentType?: string;
-      idDocumentNumber?: string;
-      notes?: string;
-    },
-  ) {
-    return this.guestsService.create(body);
+  create(@Body() dto: CreateGuestDto) {
+    return this.guestsService.create(dto);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() body: Partial<{ fullName: string; email: string; phone: string; notes: string }>) {
-    return this.guestsService.update(id, body);
+  update(@Param('id') id: string, @Body() dto: UpdateGuestDto) {
+    return this.guestsService.update(id, dto);
   }
 }

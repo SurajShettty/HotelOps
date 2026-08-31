@@ -5,6 +5,7 @@ import { Bell, Building2, Check, Percent, Pencil, ShieldCheck, Users } from 'luc
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
+import { AmenitiesEditor, AmenitiesList, toAmenitiesList } from '@/components/ui/amenities';
 
 interface Hotel {
   id: string;
@@ -18,6 +19,7 @@ interface RoomType {
   baseRate: string;
   baseOccupancy: number;
   maxOccupancy: number;
+  amenities: unknown;
 }
 
 function HotelProfileCard() {
@@ -98,6 +100,7 @@ function RoomTypesCard() {
   const [editRate, setEditRate] = useState('');
   const [editBaseOccupancy, setEditBaseOccupancy] = useState('');
   const [editMaxOccupancy, setEditMaxOccupancy] = useState('');
+  const [editAmenities, setEditAmenities] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   function reload() {
@@ -113,6 +116,7 @@ function RoomTypesCard() {
     setEditRate(t.baseRate);
     setEditBaseOccupancy(String(t.baseOccupancy));
     setEditMaxOccupancy(String(t.maxOccupancy));
+    setEditAmenities(toAmenitiesList(t.amenities));
   }
 
   async function saveEdit(id: string) {
@@ -127,6 +131,7 @@ function RoomTypesCard() {
           baseRate: Number(editRate),
           baseOccupancy: Number(editBaseOccupancy),
           maxOccupancy: Number(editMaxOccupancy),
+          amenities: editAmenities,
         }),
       });
       setEditingId(null);
@@ -181,15 +186,19 @@ function RoomTypesCard() {
                     <Button onClick={() => saveEdit(t.id)} className="px-3 py-1.5 text-xs">Save</Button>
                     <button onClick={() => setEditingId(null)} className="text-xs text-slate-400 hover:text-slate-700">Cancel</button>
                   </div>
+                  <AmenitiesEditor amenities={editAmenities} onChange={setEditAmenities} />
                 </div>
               ) : (
-                <div className="flex items-center gap-3">
-                  <span className="flex-1 text-sm font-medium text-slate-900">{t.name}</span>
-                  <span className="text-sm text-slate-500">{t.baseRate}/night</span>
-                  <span className="text-sm text-slate-500">{t.baseOccupancy}–{t.maxOccupancy} guests</span>
-                  <button onClick={() => startEdit(t)} className="text-slate-400 hover:text-brand-700">
-                    <Pencil className="h-3.5 w-3.5" />
-                  </button>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-3">
+                    <span className="flex-1 text-sm font-medium text-slate-900">{t.name}</span>
+                    <span className="text-sm text-slate-500">{t.baseRate}/night</span>
+                    <span className="text-sm text-slate-500">{t.baseOccupancy}–{t.maxOccupancy} guests</span>
+                    <button onClick={() => startEdit(t)} className="text-slate-400 hover:text-brand-700">
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <AmenitiesList amenities={t.amenities} />
                 </div>
               )}
             </li>

@@ -128,16 +128,26 @@ function BookingForm({
         });
       } else {
         if (!pickedGuest?.fullName.trim()) throw new ApiError('Enter a guest name', 400);
+        if (!pickedGuest.id && (!pickedGuest.email.trim() || !pickedGuest.phone.trim())) {
+          throw new ApiError('Enter the guest’s email and phone', 400);
+        }
 
         // Reuse the existing guest record if one was picked from the search
-        // results; only create a new one when they typed a name that didn't
-        // match anybody, so repeat guests don't fragment into duplicate profiles.
+        // results (search matches name, email, or phone, so this also covers
+        // guests found by their email/phone); only create a new one when they
+        // typed details that didn't match anybody, so repeat guests don't
+        // fragment into duplicate profiles.
         const guestId =
           pickedGuest.id ??
           (
             await apiFetch<{ id: string }>('/guests', {
               method: 'POST',
-              body: JSON.stringify({ hotelId, fullName: pickedGuest.fullName.trim() }),
+              body: JSON.stringify({
+                hotelId,
+                fullName: pickedGuest.fullName.trim(),
+                email: pickedGuest.email.trim(),
+                phone: pickedGuest.phone.trim(),
+              }),
             })
           ).id;
 

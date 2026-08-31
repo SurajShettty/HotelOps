@@ -6,6 +6,7 @@ import { ArrowLeft } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { Button, Card, ErrorBanner, Input, Label } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
+import { GuestLoyaltyBadge, GuestLoyaltyTier } from '@/components/ui/guest-loyalty-badge';
 
 interface Booking {
   id: string;
@@ -21,6 +22,8 @@ interface GuestDetail {
   phone: string | null;
   notes: string | null;
   bookings: Booking[];
+  bookingsCount: number;
+  loyaltyBadge: { tier: GuestLoyaltyTier; label: string } | null;
 }
 
 export default function GuestDetailPage() {
@@ -74,7 +77,10 @@ export default function GuestDetailPage() {
           {guest.fullName.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase()}
         </div>
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{guest.fullName}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{guest.fullName}</h1>
+            <GuestLoyaltyBadge badge={guest.loyaltyBadge} />
+          </div>
           <p className="text-sm text-slate-500">{guest.email ?? 'No email'} · {guest.phone ?? 'No phone'}</p>
         </div>
       </div>
