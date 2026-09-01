@@ -16,14 +16,27 @@ export class BookingsController {
     @Query('hotelId') hotelId: string,
     @Query('status') status?: string,
     @Query('search') search?: string,
+    @Query('roomNumber') roomNumber?: string,
     @Query('from') from?: string,
     @Query('to') to?: string,
     @Query('arrivingOn') arrivingOn?: string,
     @Query('departingOn') departingOn?: string,
+    @Query('onDate') onDate?: string,
     @Query('page') page?: string,
     @Query('pageSize') pageSize?: string,
   ) {
-    return this.bookingsService.findAllForHotel(hotelId, { status, search, from, to, arrivingOn, departingOn, page, pageSize });
+    return this.bookingsService.findAllForHotel(hotelId, {
+      status,
+      search,
+      roomNumber,
+      from,
+      to,
+      arrivingOn,
+      departingOn,
+      onDate,
+      page,
+      pageSize,
+    });
   }
 
   @Get(':id')

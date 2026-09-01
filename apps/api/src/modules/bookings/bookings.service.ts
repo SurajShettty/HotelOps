@@ -124,10 +124,12 @@ export class BookingsService {
     opts: {
       status?: string;
       search?: string;
+      roomNumber?: string;
       from?: string;
       to?: string;
       arrivingOn?: string;
       departingOn?: string;
+      onDate?: string;
       page?: string;
       pageSize?: string;
     },
@@ -138,12 +140,20 @@ export class BookingsService {
       hotelId,
       ...(opts.status ? { status: opts.status as never } : {}),
       ...(opts.search ? { guest: { fullName: { contains: opts.search, mode: 'insensitive' } } } : {}),
+      ...(opts.roomNumber
+        ? { bookingRooms: { some: { room: { roomNumber: { contains: opts.roomNumber, mode: 'insensitive' } } } } }
+        : {}),
       ...(opts.from ? { checkInDate: { gte: new Date(opts.from) } } : {}),
       ...(opts.to ? { checkOutDate: { lte: new Date(opts.to) } } : {}),
       // Exact-day matches (as opposed to from/to, which bound a range) — used
       // by the "arriving/departing today" quick filters.
       ...(opts.arrivingOn ? { checkInDate: new Date(opts.arrivingOn) } : {}),
       ...(opts.departingOn ? { checkOutDate: new Date(opts.departingOn) } : {}),
+      // "On this date" — arrivals, departures, and everything staying through
+      // it, i.e. the stay just has to overlap the day: checkInDate <= date <=
+      // checkOutDate. Both bounds together, so it can't collide with the
+      // single-sided keys above (the frontend never sends both at once anyway).
+      ...(opts.onDate ? { checkInDate: { lte: new Date(opts.onDate) }, checkOutDate: { gte: new Date(opts.onDate) } } : {}),
     };
 
     const [items, total] = await Promise.all([

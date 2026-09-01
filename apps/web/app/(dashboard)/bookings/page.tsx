@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeftRight, CalendarRange, Download, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
+import { ArrowLeftRight, CalendarRange, DoorOpen, Download, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
 import { apiFetch, ApiError, downloadFile } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
@@ -557,6 +557,9 @@ export default function BookingsPage() {
   const [status, setStatus] = useState('');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [roomNumber, setRoomNumber] = useState('');
+  const [roomNumberInput, setRoomNumberInput] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -572,6 +575,13 @@ export default function BookingsPage() {
     const turningOn = quickFilter !== filter;
     setQuickFilter(turningOn ? filter : null);
     setStatus(turningOn ? (filter === 'ARRIVING_TODAY' ? 'CONFIRMED' : 'CHECKED_IN') : '');
+    if (turningOn) setDateFilter('');
+    setPage(1);
+  }
+
+  function handleDateFilterChange(value: string) {
+    setDateFilter(value);
+    if (value) setQuickFilter(null);
     setPage(1);
   }
 
@@ -584,12 +594,22 @@ export default function BookingsPage() {
     return () => clearTimeout(timer);
   }, [searchInput]);
 
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setRoomNumber(roomNumberInput);
+      setPage(1);
+    }, 350);
+    return () => clearTimeout(timer);
+  }, [roomNumberInput]);
+
   function reload() {
     if (!hotelId) return;
     setLoading(true);
     const params = new URLSearchParams({ hotelId, page: String(page), pageSize: String(PAGE_SIZE) });
     if (status) params.set('status', status);
     if (search) params.set('search', search);
+    if (roomNumber) params.set('roomNumber', roomNumber);
+    if (dateFilter) params.set('onDate', dateFilter);
     if (quickFilter === 'ARRIVING_TODAY') params.set('arrivingOn', today);
     if (quickFilter === 'DEPARTING_TODAY') params.set('departingOn', today);
     apiFetch<{ items: Booking[]; total: number }>(`/bookings?${params.toString()}`)
@@ -603,7 +623,7 @@ export default function BookingsPage() {
   useEffect(() => {
     if (ready) reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, hotelId, status, search, quickFilter, page]);
+  }, [ready, hotelId, status, search, roomNumber, dateFilter, quickFilter, page]);
 
   async function handleCancel(id: string) {
     if (!confirm('Cancel this booking?')) return;
@@ -665,6 +685,15 @@ export default function BookingsPage() {
             className="pl-9"
           />
         </div>
+        <div className="relative w-40">
+          <DoorOpen className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <Input
+            placeholder="Room #"
+            value={roomNumberInput}
+            onChange={(e) => setRoomNumberInput(e.target.value)}
+            className="pl-9"
+          />
+        </div>
         <Select
           value={status}
           onChange={(e) => {
@@ -678,6 +707,24 @@ export default function BookingsPage() {
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </Select>
+        <div>
+          <Input
+            type="date"
+            title="Show bookings covering this date (check-in, check-out, or in between)"
+            value={dateFilter}
+            onChange={(e) => handleDateFilterChange(e.target.value)}
+            className="w-40"
+          />
+        </div>
+        {dateFilter && (
+          <button
+            type="button"
+            onClick={() => handleDateFilterChange('')}
+            className="shrink-0 text-xs text-slate-400 hover:text-slate-700"
+          >
+            Clear date
+          </button>
+        )}
 
         <span className="mx-1 h-6 w-px shrink-0 bg-slate-200" />
 

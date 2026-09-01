@@ -35,6 +35,46 @@ function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (
   );
 }
 
+/**
+ * Shared shell for every settings section: header (icon/title/subtitle) is
+ * always visible and toggles the body — open state is owned by SettingsPage
+ * (one key, not per-card) so opening one section folds whichever was open.
+ * Data fetching inside each card still runs regardless of isOpen (they stay
+ * mounted, just don't render their body), so expanding never has to wait on
+ * a fresh request.
+ */
+function AccordionSection({
+  icon: Icon,
+  title,
+  subtitle,
+  isOpen,
+  onToggle,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  subtitle: string;
+  isOpen: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card className="overflow-hidden p-0">
+      <button type="button" onClick={onToggle} aria-expanded={isOpen} className="flex w-full items-center gap-2 p-5 text-left">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+          <Icon className="h-4 w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="font-medium text-slate-900">{title}</div>
+          <p className="text-sm text-slate-500">{subtitle}</p>
+        </div>
+        <ChevronDown className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+      </button>
+      {isOpen && <div className="border-t border-slate-100 p-5 pt-4">{children}</div>}
+    </Card>
+  );
+}
+
 const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
 interface RoomType {
@@ -50,7 +90,7 @@ function money(n: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function HotelProfileCard() {
+function HotelProfileCard({ isOpen, onToggle }: { isOpen: boolean; onToggle: () => void }) {
   const { hotelId } = useCurrentHotel();
   const [hotel, setHotel] = useState<Hotel | null>(null);
   const [name, setName] = useState('');
@@ -125,19 +165,17 @@ function HotelProfileCard() {
     }
   }
 
-  if (!hotel) return null;
-
   return (
-    <Card className="p-5">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-          <Building2 className="h-4 w-4" />
-        </div>
-        <div>
-          <div className="font-medium text-slate-900">Hotel Profile</div>
-          <p className="text-sm text-slate-500">Name, timezone, and check-in/check-out policy times for this property.</p>
-        </div>
-      </div>
+    <AccordionSection
+      icon={Building2}
+      title="Hotel Profile"
+      subtitle="Name, timezone, and check-in/check-out policy times for this property."
+      isOpen={isOpen}
+      onToggle={onToggle}
+    >
+      {!hotel ? (
+        <p className="text-sm text-slate-400">Loading…</p>
+      ) : (
       <form onSubmit={handleSave} className="space-y-3">
         {error && <ErrorBanner>{error}</ErrorBanner>}
         <div>
@@ -216,7 +254,8 @@ function HotelProfileCard() {
           {saved ? <><Check className="h-4 w-4" /> Saved</> : saving ? 'Saving…' : 'Save changes'}
         </Button>
       </form>
-    </Card>
+      )}
+    </AccordionSection>
   );
 }
 
@@ -237,7 +276,7 @@ interface HousekeepingStaff {
   roles: { role: string }[];
 }
 
-function HousekeepingRosterCard() {
+function HousekeepingRosterCard({ isOpen, onToggle }: { isOpen: boolean; onToggle: () => void }) {
   const { hotelId } = useCurrentHotel();
   const [autoAssignEnabled, setAutoAssignEnabled] = useState(false);
   const [togglingAutoAssign, setTogglingAutoAssign] = useState(false);
@@ -307,17 +346,13 @@ function HousekeepingRosterCard() {
   }
 
   return (
-    <Card className="p-5">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-          <ClipboardList className="h-4 w-4" />
-        </div>
-        <div>
-          <div className="font-medium text-slate-900">Housekeeping Assignment</div>
-          <p className="text-sm text-slate-500">Assign one housekeeping staff member per floor.</p>
-        </div>
-      </div>
-
+    <AccordionSection
+      icon={ClipboardList}
+      title="Housekeeping Assignment"
+      subtitle="Assign one housekeeping staff member per floor."
+      isOpen={isOpen}
+      onToggle={onToggle}
+    >
       {error && <div className="mb-3"><ErrorBanner>{error}</ErrorBanner></div>}
 
       <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -381,11 +416,11 @@ function HousekeepingRosterCard() {
           })}
         </ul>
       )}
-    </Card>
+    </AccordionSection>
   );
 }
 
-function RoomTypesCard() {
+function RoomTypesCard({ isOpen, onToggle }: { isOpen: boolean; onToggle: () => void }) {
   const { hotelId } = useCurrentHotel();
   const [types, setTypes] = useState<RoomType[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -435,16 +470,7 @@ function RoomTypesCard() {
   }
 
   return (
-    <Card className="p-5">
-      <div className="mb-3 flex items-center gap-2">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-          <ShieldCheck className="h-4 w-4" />
-        </div>
-        <div>
-          <div className="font-medium text-slate-900">Room Types</div>
-          <p className="text-sm text-slate-500">Rename or reprice existing room types.</p>
-        </div>
-      </div>
+    <AccordionSection icon={ShieldCheck} title="Room Types" subtitle="Rename or reprice existing room types." isOpen={isOpen} onToggle={onToggle}>
       {error && <div className="mb-3"><ErrorBanner>{error}</ErrorBanner></div>}
       {types.length === 0 ? (
         <p className="text-sm text-slate-400">No room types yet — add one from the Rooms page.</p>
@@ -498,7 +524,7 @@ function RoomTypesCard() {
           ))}
         </ul>
       )}
-    </Card>
+    </AccordionSection>
   );
 }
 
@@ -561,7 +587,7 @@ function ruleAdjustmentLabel(rule: PricingRule) {
   return rule.adjustmentType === 'PERCENTAGE' ? `${sign}${value}%` : `${sign}${money(value)}`;
 }
 
-function PricingRulesCard() {
+function PricingRulesCard({ isOpen, onToggle }: { isOpen: boolean; onToggle: () => void }) {
   const { hotelId } = useCurrentHotel();
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([]);
   const [rules, setRules] = useState<PricingRule[]>([]);
@@ -697,17 +723,14 @@ function PricingRulesCard() {
   }
 
   return (
-    <Card className="p-5 md:col-span-2">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-            <Percent className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="font-medium text-slate-900">Pricing Rules</div>
-            <p className="text-sm text-slate-500">Seasonal, weekend, and dynamic rate adjustments on top of a room type's base rate.</p>
-          </div>
-        </div>
+    <AccordionSection
+      icon={Percent}
+      title="Pricing Rules"
+      subtitle="Seasonal, weekend, and dynamic rate adjustments on top of a room type's base rate."
+      isOpen={isOpen}
+      onToggle={onToggle}
+    >
+      <div className="mb-3 flex justify-end">
         {!formOpen && (
           <Button variant="secondary" onClick={startAdd} className="shrink-0">
             <Plus className="h-4 w-4" /> Add rule
@@ -875,7 +898,7 @@ function PricingRulesCard() {
           </div>
         </div>
       )}
-    </Card>
+    </AccordionSection>
   );
 }
 
@@ -912,7 +935,7 @@ function emptyUserForm() {
   return { email: '', fullName: '', phone: '', password: '', role: 'RECEPTIONIST' as string };
 }
 
-function UsersRolesCard() {
+function UsersRolesCard({ isOpen, onToggle }: { isOpen: boolean; onToggle: () => void }) {
   const { hotelId } = useCurrentHotel();
   const [users, setUsers] = useState<StaffUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -998,17 +1021,14 @@ function UsersRolesCard() {
   }
 
   return (
-    <Card className="p-5 md:col-span-2">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-            <Users className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="font-medium text-slate-900">Users &amp; Roles</div>
-            <p className="text-sm text-slate-500">Staff accounts and what they can do at this property.</p>
-          </div>
-        </div>
+    <AccordionSection
+      icon={Users}
+      title="Users & Roles"
+      subtitle="Staff accounts and what they can do at this property."
+      isOpen={isOpen}
+      onToggle={onToggle}
+    >
+      <div className="mb-3 flex justify-end">
         {!formOpen && (
           <Button variant="secondary" onClick={() => setFormOpen(true)} className="shrink-0">
             <Plus className="h-4 w-4" /> Add user
@@ -1115,25 +1135,38 @@ function UsersRolesCard() {
           ))}
         </ul>
       )}
-    </Card>
+    </AccordionSection>
   );
 }
 
+type SectionKey = 'profile' | 'roomTypes' | 'pricing' | 'housekeeping' | 'users';
+
 export default function SettingsPage() {
   const { hotelId, ready } = useCurrentHotel();
+  // Accordion: one key, not per-card state — opening a section always folds
+  // whichever was open, per how this page is meant to behave.
+  const [openSection, setOpenSection] = useState<SectionKey | null>(null);
+
+  function toggle(key: SectionKey) {
+    setOpenSection((cur) => (cur === key ? null : key));
+  }
 
   if (!ready) return null;
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
   return (
-    <div>
+    <div className="mx-auto max-w-3xl">
       <PageHeader title="Settings" subtitle="Configure this property." />
-      <div className="grid gap-4 md:grid-cols-2">
-        <HotelProfileCard />
-        <RoomTypesCard />
-        <HousekeepingRosterCard />
-        <PricingRulesCard />
-        <UsersRolesCard />
+      {/* Single column, deliberately: these cards' content ranges from a two-field
+          form to an open-ended list, so a 2-col grid left uneven gaps wherever a
+          short card sat beside a tall one — a stack sidesteps that entirely,
+          and groups Rooms+Pricing (rates) before Housekeeping+Users (staff). */}
+      <div className="space-y-3">
+        <HotelProfileCard isOpen={openSection === 'profile'} onToggle={() => toggle('profile')} />
+        <RoomTypesCard isOpen={openSection === 'roomTypes'} onToggle={() => toggle('roomTypes')} />
+        <PricingRulesCard isOpen={openSection === 'pricing'} onToggle={() => toggle('pricing')} />
+        <HousekeepingRosterCard isOpen={openSection === 'housekeeping'} onToggle={() => toggle('housekeeping')} />
+        <UsersRolesCard isOpen={openSection === 'users'} onToggle={() => toggle('users')} />
         {UNAVAILABLE_SECTIONS.map(({ name, icon: Icon, note }) => (
           <Card key={name} className="flex items-start gap-3 p-5 opacity-60">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
