@@ -1,12 +1,27 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AuditLogService, fieldDiff, snapshot } from '../audit-logs/audit-log.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { AssignRoleDto } from './dto/assign-role.dto';
 
+const GRANT_FIELDS = ['userId', 'hotelId', 'roleId'] as const;
+
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLog: AuditLogService,
+  ) {}
+
+  /** Every role grant held by `userId` — platform-wide (hotelId null) and hotel-scoped. Powers `GET /users/me/roles`. */
+  async findGrantsForUser(userId: string) {
+    const grants = await this.prisma.userHotelRole.findMany({
+      where: { userId },
+      include: { role: true },
+    });
+    return grants.map((g) => ({ hotelId: g.hotelId, role: g.role.name }));
+  }
 
   /**
    * Staff at `hotelId` — anyone holding a role grant scoped to this hotel,
@@ -38,7 +53,7 @@ export class UsersService {
     return Array.from(byUser.values());
   }
 
-  async create(dto: CreateUserDto) {
+  async create(dto: CreateUserDto, actorId: string) {
     const existing = await this.prisma.user.findUnique({ where: { email: dto.email } });
     if (existing) {
       throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'A user with this email already exists' });
@@ -47,7 +62,7 @@ export class UsersService {
     const role = await this.prisma.role.findUniqueOrThrow({ where: { name: dto.role } });
     const passwordHash = await bcrypt.hash(dto.password, 10);
 
-    return this.prisma.user.create({
+    const user = await this.prisma.user.create({
       data: {
         email: dto.email,
         fullName: dto.fullName,
@@ -57,9 +72,18 @@ export class UsersService {
       },
       include: { userHotelRoles: { include: { role: true } } },
     });
+    await this.auditLog.record(this.prisma, {
+      hotelId: dto.hotelId,
+      actorId,
+      entity: 'User',
+      entityId: user.id,
+      action: 'CREATE',
+      after: { email: user.email, fullName: user.fullName, phone: user.phone, role: dto.role },
+    });
+    return user;
   }
 
-  async assignRole(userId: string, dto: AssignRoleDto) {
+  async assignRole(userId: string, dto: AssignRoleDto, actorId: string) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('User not found');
 
@@ -67,18 +91,63 @@ export class UsersService {
     const existing = await this.prisma.userHotelRole.findFirst({ where: { userId, hotelId: dto.hotelId, roleId: role.id } });
     if (existing) return existing;
 
-    return this.prisma.userHotelRole.create({ data: { userId, hotelId: dto.hotelId, roleId: role.id } });
+    const grant = await this.prisma.userHotelRole.create({ data: { userId, hotelId: dto.hotelId, roleId: role.id } });
+    await this.auditLog.record(this.prisma, {
+      hotelId: dto.hotelId,
+      actorId,
+      entity: 'UserHotelRole',
+      entityId: grant.id,
+      action: 'ASSIGN',
+      after: snapshot(grant, GRANT_FIELDS),
+    });
+    return grant;
   }
 
-  async revokeRole(grantId: string) {
+  async revokeRole(grantId: string, actorId: string) {
     const grant = await this.prisma.userHotelRole.findUnique({ where: { id: grantId } });
     if (!grant) throw new NotFoundException('Role grant not found');
     await this.prisma.userHotelRole.delete({ where: { id: grantId } });
+    await this.auditLog.record(this.prisma, {
+      hotelId: grant.hotelId,
+      actorId,
+      entity: 'UserHotelRole',
+      entityId: grantId,
+      action: 'REVOKE',
+      before: snapshot(grant, GRANT_FIELDS),
+    });
   }
 
-  async setActive(id: string, isActive: boolean) {
-    const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException('User not found');
-    return this.prisma.user.update({ where: { id }, data: { isActive } });
+  async setActive(id: string, isActive: boolean, actorId: string) {
+    const before = await this.prisma.user.findUnique({ where: { id } });
+    if (!before) throw new NotFoundException('User not found');
+    const after = await this.prisma.user.update({ where: { id }, data: { isActive } });
+    const diff = fieldDiff(before, after, ['isActive'] as const);
+    await this.auditLog.record(this.prisma, {
+      hotelId: null,
+      actorId,
+      entity: 'User',
+      entityId: id,
+      action: isActive ? 'ACTIVATE' : 'DEACTIVATE',
+      before: diff.before,
+      after: diff.after,
+    });
+    return after;
+  }
+
+  /** Revert of a UserHotelRole ASSIGN — plain delete, no audit entry of its own. */
+  async revokeGrantById(grantId: string) {
+    const grant = await this.prisma.userHotelRole.findUnique({ where: { id: grantId } });
+    if (!grant) return;
+    await this.prisma.userHotelRole.delete({ where: { id: grantId } });
+  }
+
+  /** Revert of a UserHotelRole REVOKE — recreates the grant with the same id and fields. */
+  async recreateGrant(id: string, fields: { userId: string; hotelId: string | null; roleId: string }) {
+    return this.prisma.userHotelRole.create({ data: { id, ...fields } });
+  }
+
+  /** Revert of a User ACTIVATE/DEACTIVATE — reapplies a stored field snapshot without re-logging. */
+  async restoreFields(id: string, fields: Record<string, unknown>) {
+    await this.prisma.user.update({ where: { id }, data: fields });
   }
 }

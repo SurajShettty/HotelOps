@@ -19,6 +19,7 @@ import { PricingRulesModule } from './modules/pricing-rules/pricing-rules.module
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
 import { UsersModule } from './modules/users/users.module';
+import { AuditLogsModule } from './modules/audit-logs/audit-logs.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -43,6 +44,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     NotificationsModule,
     InvoicesModule,
     UsersModule,
+    AuditLogsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

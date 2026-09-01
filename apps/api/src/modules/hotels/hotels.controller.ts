@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import { Prisma } from '@hotelops/database';
+import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { HotelsService } from './hotels.service';
 
@@ -30,8 +31,9 @@ export class HotelsController {
       earlyCheckInFee?: number;
       lateCheckOutFee?: number;
     },
+    @CurrentUser() user: CurrentUserPayload,
   ) {
-    return this.hotelsService.create(body);
+    return this.hotelsService.create(body, user.id);
   }
 
   // Param is named `hotelId` (not `id`) so RolesGuard can resolve it from
@@ -50,7 +52,8 @@ export class HotelsController {
       earlyCheckInFee: number;
       lateCheckOutFee: number;
     }>,
+    @CurrentUser() user: CurrentUserPayload,
   ) {
-    return this.hotelsService.update(hotelId, body);
+    return this.hotelsService.update(hotelId, body, user.id);
   }
 }

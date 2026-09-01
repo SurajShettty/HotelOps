@@ -20,7 +20,7 @@ export class RoomChargesController {
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.roomChargesService.remove(id);
+  remove(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.roomChargesService.remove(id, user.id);
   }
 }

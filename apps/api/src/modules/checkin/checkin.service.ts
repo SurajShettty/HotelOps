@@ -1,11 +1,15 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { todayUtcDateOnly, localTimeHHmm } from '../../common/date.util';
+import { AuditLogService } from '../audit-logs/audit-log.service';
 import { CheckinDto } from './dto/checkin.dto';
 
 @Injectable()
 export class CheckinService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLog: AuditLogService,
+  ) {}
 
   async checkin(dto: CheckinDto, checkedInById: string) {
     return this.prisma.$transaction(async (tx) => {
@@ -67,7 +71,19 @@ export class CheckinService {
         });
       }
 
-      return tx.booking.update({ where: { id: dto.bookingId }, data: { status: 'CHECKED_IN', checkInDate } });
+      const updated = await tx.booking.update({ where: { id: dto.bookingId }, data: { status: 'CHECKED_IN', checkInDate } });
+
+      await this.auditLog.record(tx, {
+        hotelId: booking.hotelId,
+        actorId: checkedInById,
+        entity: 'Booking',
+        entityId: dto.bookingId,
+        action: 'CHECK_IN',
+        before: { status: booking.status, checkInDate: booking.checkInDate.toISOString().slice(0, 10) },
+        after: { status: updated.status, checkInDate: updated.checkInDate.toISOString().slice(0, 10) },
+      });
+
+      return updated;
     });
   }
 }

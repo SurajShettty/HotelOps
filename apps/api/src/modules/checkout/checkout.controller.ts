@@ -1,4 +1,5 @@
 import { Body, Controller, HttpCode, Post } from '@nestjs/common';
+import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { CheckoutService } from './checkout.service';
 import { CheckoutDto } from './dto/checkout.dto';
 import { PreviewFolioDto } from './dto/preview-folio.dto';
@@ -14,7 +15,7 @@ export class CheckoutController {
   }
 
   @Post()
-  checkout(@Body() dto: CheckoutDto) {
-    return this.checkoutService.checkout(dto);
+  checkout(@Body() dto: CheckoutDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.checkoutService.checkout(dto, user.id);
   }
 }

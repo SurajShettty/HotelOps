@@ -1,9 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AuditLogService, fieldDiff } from '../audit-logs/audit-log.service';
 
 @Injectable()
 export class HousekeepingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLog: AuditLogService,
+  ) {}
 
   /**
    * The live housekeeping board: one row per room (its most recent task —
@@ -28,7 +32,8 @@ export class HousekeepingService {
     return filtered.sort((a, b) => b.priority - a.priority || a.createdAt.getTime() - b.createdAt.getTime());
   }
 
-  async updateTask(id: string, data: { status?: 'DIRTY' | 'IN_PROGRESS' | 'INSPECTED' | 'READY'; assignedToId?: string }) {
+  async updateTask(id: string, data: { status?: 'DIRTY' | 'IN_PROGRESS' | 'INSPECTED' | 'READY'; assignedToId?: string }, actorId: string) {
+    const before = await this.prisma.housekeepingTask.findUniqueOrThrow({ where: { id }, include: { room: { select: { hotelId: true } } } });
     const task = await this.prisma.housekeepingTask.update({
       where: { id },
       data: {
@@ -40,6 +45,17 @@ export class HousekeepingService {
     if (data.status === 'READY') {
       await this.prisma.room.update({ where: { id: task.roomId }, data: { status: 'AVAILABLE' } });
     }
+
+    const diff = fieldDiff(before, task, ['status', 'assignedToId'] as const);
+    await this.auditLog.record(this.prisma, {
+      hotelId: before.room.hotelId,
+      actorId,
+      entity: 'HousekeepingTask',
+      entityId: id,
+      action: 'UPDATE',
+      before: diff.before,
+      after: diff.after,
+    });
 
     return task;
   }

@@ -5,5 +5,6 @@ import { RoomChargesService } from './room-charges.service';
 @Module({
   controllers: [RoomChargesController],
   providers: [RoomChargesService],
+  exports: [RoomChargesService],
 })
 export class RoomChargesModule {}

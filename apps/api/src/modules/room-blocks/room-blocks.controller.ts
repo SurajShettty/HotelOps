@@ -27,7 +27,7 @@ export class RoomBlocksController {
   // has no hotelId column of its own) — same convention as the POST route above.
   @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')
   @Delete(':id')
-  remove(@Param('id') id: string, @Query('hotelId') _hotelId: string) {
-    return this.roomBlocksService.remove(id);
+  remove(@Param('id') id: string, @Query('hotelId') _hotelId: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.roomBlocksService.remove(id, user.id);
   }
 }

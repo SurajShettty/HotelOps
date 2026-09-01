@@ -12,7 +12,7 @@ import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 type ReportType = 'occupancy' | 'revenue' | 'bookings' | 'cancellations' | 'housekeeping';
 
 const PAGINATED_TYPES: ReportType[] = ['bookings', 'cancellations', 'housekeeping'];
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 25;
 
 const REPORT_TYPES: { key: ReportType; label: string }[] = [
   { key: 'occupancy', label: 'Occupancy' },

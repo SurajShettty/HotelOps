@@ -10,7 +10,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { GuestLoyaltyBadge, GuestLoyaltyTier } from '@/components/ui/guest-loyalty-badge';
 import { GuestFlagBadge } from '@/components/ui/guest-flag-badge';
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 25;
 
 interface Guest {
   id: string;

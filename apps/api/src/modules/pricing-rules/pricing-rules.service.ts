@@ -1,8 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, PricingRule } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AuditLogService, fieldDiff, snapshot } from '../audit-logs/audit-log.service';
 import { CreatePricingRuleDto } from './dto/create-pricing-rule.dto';
 import { UpdatePricingRuleDto } from './dto/update-pricing-rule.dto';
+
+const PRICING_RULE_FIELDS = ['roomTypeId', 'name', 'adjustmentType', 'adjustmentValue', 'startDate', 'endDate', 'daysOfWeek', 'active', 'priority'] as const;
+const PRICING_RULE_RECREATE_FIELDS = ['hotelId', ...PRICING_RULE_FIELDS] as const;
 
 export interface AppliedRule {
   id: string;
@@ -23,7 +27,10 @@ type RuleInput = {
 
 @Injectable()
 export class PricingRulesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLog: AuditLogService,
+  ) {}
 
   findAllForHotel(hotelId: string, roomTypeId?: string) {
     return this.prisma.pricingRule.findMany({
@@ -66,10 +73,10 @@ export class PricingRulesService {
     return [...new Set(daysOfWeek ?? [])].sort((a, b) => a - b);
   }
 
-  async create(dto: CreatePricingRuleDto) {
+  async create(dto: CreatePricingRuleDto, actorId: string) {
     await this.assertValid(dto.hotelId, dto);
 
-    return this.prisma.pricingRule.create({
+    const rule = await this.prisma.pricingRule.create({
       data: {
         hotelId: dto.hotelId,
         roomTypeId: dto.roomTypeId,
@@ -84,9 +91,18 @@ export class PricingRulesService {
       },
       include: { roomType: true },
     });
+    await this.auditLog.record(this.prisma, {
+      hotelId: rule.hotelId,
+      actorId,
+      entity: 'PricingRule',
+      entityId: rule.id,
+      action: 'CREATE',
+      after: snapshot(rule, PRICING_RULE_RECREATE_FIELDS),
+    });
+    return rule;
   }
 
-  async update(id: string, dto: UpdatePricingRuleDto) {
+  async update(id: string, dto: UpdatePricingRuleDto, actorId: string) {
     const existing = await this.prisma.pricingRule.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Pricing rule not found');
     if (existing.hotelId !== dto.hotelId) {
@@ -106,14 +122,50 @@ export class PricingRulesService {
     if (dto.priority !== undefined) data.priority = dto.priority;
     if (dto.active !== undefined) data.active = dto.active;
 
-    return this.prisma.pricingRule.update({ where: { id }, data, include: { roomType: true } });
+    const after = await this.prisma.pricingRule.update({ where: { id }, data, include: { roomType: true } });
+    const diff = fieldDiff(existing, after, PRICING_RULE_FIELDS);
+    await this.auditLog.record(this.prisma, {
+      hotelId: after.hotelId,
+      actorId,
+      entity: 'PricingRule',
+      entityId: id,
+      action: 'UPDATE',
+      before: diff.before,
+      after: diff.after,
+    });
+    return after;
   }
 
-  async remove(id: string) {
+  async remove(id: string, actorId: string) {
     const existing = await this.prisma.pricingRule.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException('Pricing rule not found');
     await this.prisma.pricingRule.delete({ where: { id } });
+    await this.auditLog.record(this.prisma, {
+      hotelId: existing.hotelId,
+      actorId,
+      entity: 'PricingRule',
+      entityId: id,
+      action: 'DELETE',
+      before: snapshot(existing, PRICING_RULE_RECREATE_FIELDS),
+    });
     return { id };
+  }
+
+  /** Revert of a PricingRule CREATE — plain delete, no audit entry of its own. */
+  async removeById(id: string) {
+    const existing = await this.prisma.pricingRule.findUnique({ where: { id } });
+    if (!existing) return;
+    await this.prisma.pricingRule.delete({ where: { id } });
+  }
+
+  /** Revert of a PricingRule UPDATE — reapplies a stored field snapshot without re-logging. */
+  async restoreFields(id: string, fields: Record<string, unknown>) {
+    await this.prisma.pricingRule.update({ where: { id }, data: fields as Prisma.PricingRuleUpdateInput });
+  }
+
+  /** Revert of a PricingRule DELETE — recreates it with the same id and fields. */
+  async recreate(id: string, fields: Record<string, unknown>) {
+    return this.prisma.pricingRule.create({ data: { id, ...fields } as Prisma.PricingRuleUncheckedCreateInput });
   }
 
   private async matchingRules(hotelId: string, roomTypeId: string) {

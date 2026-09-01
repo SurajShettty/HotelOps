@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RoomsService } from './rooms.service';
 import { AvailabilityService } from './availability.service';
@@ -35,20 +36,24 @@ export class RoomsController {
 
   @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')
   @Post()
-  create(@Body() body: { hotelId: string; roomTypeId: string; roomNumber: string; floor?: string }) {
-    return this.roomsService.create(body);
+  create(@Body() body: { hotelId: string; roomTypeId: string; roomNumber: string; floor?: string }, @CurrentUser() user: CurrentUserPayload) {
+    return this.roomsService.create(body, user.id);
   }
 
   @Patch(':id/status')
-  updateStatus(@Param('id') id: string, @Body('status') status: 'AVAILABLE' | 'OCCUPIED' | 'DIRTY' | 'OUT_OF_ORDER') {
-    return this.roomsService.updateStatus(id, status);
+  updateStatus(
+    @Param('id') id: string,
+    @Body('status') status: 'AVAILABLE' | 'OCCUPIED' | 'DIRTY' | 'OUT_OF_ORDER',
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.roomsService.updateStatus(id, status, user.id);
   }
 
   // `hotelId` in the body is read by RolesGuard for scoping only, same convention
   // as PATCH /room-types/:id — Room's floor update doesn't otherwise need it.
   @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')
   @Patch(':id/floor')
-  updateFloor(@Param('id') id: string, @Body() body: { hotelId: string; floor: string | null }) {
-    return this.roomsService.updateFloor(id, body.floor || null);
+  updateFloor(@Param('id') id: string, @Body() body: { hotelId: string; floor: string | null }, @CurrentUser() user: CurrentUserPayload) {
+    return this.roomsService.updateFloor(id, body.floor || null, user.id);
   }
 }

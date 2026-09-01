@@ -2,6 +2,7 @@ import { ConflictException, HttpException, HttpStatus, Injectable, NotFoundExcep
 import { Prisma } from '@hotelops/database';
 import { addDaysUtc, differenceInCalendarDays, localTimeHHmm, todayUtcDateOnly } from '../../common/date.util';
 import { PrismaService } from '../../prisma/prisma.service';
+import { AuditLogService } from '../audit-logs/audit-log.service';
 import { CheckoutDto, LineItem } from './dto/checkout.dto';
 import { PreviewFolioDto } from './dto/preview-folio.dto';
 
@@ -9,7 +10,10 @@ const DEFAULT_TAX_RATE_PERCENT = 12;
 
 @Injectable()
 export class CheckoutService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLog: AuditLogService,
+  ) {}
 
   /**
    * Shared by both the live checkout transaction and the read-only preview,
@@ -106,7 +110,7 @@ export class CheckoutService {
     return folio;
   }
 
-  async checkout(dto: CheckoutDto) {
+  async checkout(dto: CheckoutDto, actorId: string) {
     return this.prisma.$transaction(async (tx) => {
       const {
         booking,
@@ -160,6 +164,24 @@ export class CheckoutService {
         await tx.room.update({ where: { id: br.roomId }, data: { status: 'DIRTY' } });
         await tx.housekeepingTask.create({ data: { roomId: br.roomId, status: 'DIRTY', priority: 1 } });
       }
+
+      await this.auditLog.record(tx, {
+        hotelId: booking.hotelId,
+        actorId,
+        entity: 'Booking',
+        entityId: booking.id,
+        action: 'CHECK_OUT',
+        before: { status: 'CHECKED_IN' },
+        after: { status: 'CHECKED_OUT', checkOutDate: actualCheckOut.toISOString().slice(0, 10), grandTotal },
+      });
+      await this.auditLog.record(tx, {
+        hotelId: booking.hotelId,
+        actorId,
+        entity: 'Invoice',
+        entityId: invoice.id,
+        action: 'CREATE',
+        after: { bookingId: booking.id, nights, roomSubtotal, chargesTotal, lateCheckOutFee, subtotal, taxTotal, grandTotal },
+      });
 
       return invoice;
     });

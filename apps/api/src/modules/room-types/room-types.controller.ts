@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { Prisma } from '@hotelops/database';
+import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RoomTypesService } from './room-types.service';
 
@@ -24,8 +25,9 @@ export class RoomTypesController {
       baseRate: number;
       amenities?: Prisma.InputJsonValue;
     },
+    @CurrentUser() user: CurrentUserPayload,
   ) {
-    return this.roomTypesService.create(body);
+    return this.roomTypesService.create(body, user.id);
   }
 
   // `hotelId` in the body is read by RolesGuard for scoping only (this route's
@@ -43,8 +45,9 @@ export class RoomTypesController {
       maxOccupancy?: number;
       amenities?: Prisma.InputJsonValue;
     },
+    @CurrentUser() user: CurrentUserPayload,
   ) {
     const { hotelId: _hotelId, ...data } = body;
-    return this.roomTypesService.update(id, data);
+    return this.roomTypesService.update(id, data, user.id);
   }
 }

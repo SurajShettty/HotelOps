@@ -11,7 +11,7 @@ import { Pagination } from '@/components/ui/pagination';
 import { GuestPicker, PickedGuest } from '@/components/ui/guest-picker';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 25;
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },

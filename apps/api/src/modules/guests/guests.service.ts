@@ -1,11 +1,15 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizePagination, PaginatedResult } from '../../common/pagination';
+import { AuditLogService, fieldDiff, snapshot } from '../audit-logs/audit-log.service';
 import { COUNTED_BOOKING_STATUSES, getGuestLoyaltyTier } from './guest-loyalty';
 import { CreateGuestDto } from './dto/create-guest.dto';
 import { UpdateGuestDto } from './dto/update-guest.dto';
 import { FlagGuestDto } from './dto/flag-guest.dto';
+
+const GUEST_FIELDS = ['fullName', 'email', 'phone', 'idDocumentType', 'idDocumentNumber', 'notes'] as const;
+const FLAG_FIELDS = ['isFlagged', 'flagReason', 'flaggedAt', 'flaggedById'] as const;
 
 type GuestWithBookingsCount = Prisma.GuestGetPayload<{ include: { _count: { select: { bookings: true } } } }>;
 
@@ -16,7 +20,10 @@ function withLoyaltyBadge<T extends { _count: { bookings: number } }>(guest: T) 
 
 @Injectable()
 export class GuestsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly auditLog: AuditLogService,
+  ) {}
 
   async findAllForHotel(
     hotelId: string,
@@ -67,27 +74,84 @@ export class GuestsService {
     return withLoyaltyBadge(guest);
   }
 
-  create(data: CreateGuestDto) {
-    return this.prisma.guest.create({ data });
+  async create(data: CreateGuestDto, actorId: string) {
+    const guest = await this.prisma.guest.create({ data });
+    await this.auditLog.record(this.prisma, {
+      hotelId: guest.hotelId,
+      actorId,
+      entity: 'Guest',
+      entityId: guest.id,
+      action: 'CREATE',
+      after: snapshot(guest, GUEST_FIELDS),
+    });
+    return guest;
   }
 
-  update(id: string, data: UpdateGuestDto) {
-    return this.prisma.guest.update({ where: { id }, data });
+  async update(id: string, data: UpdateGuestDto, actorId: string) {
+    const before = await this.prisma.guest.findUniqueOrThrow({ where: { id } });
+    const after = await this.prisma.guest.update({ where: { id }, data });
+    const diff = fieldDiff(before, after, GUEST_FIELDS);
+    await this.auditLog.record(this.prisma, {
+      hotelId: after.hotelId,
+      actorId,
+      entity: 'Guest',
+      entityId: id,
+      action: 'UPDATE',
+      before: diff.before,
+      after: diff.after,
+    });
+    return after;
   }
 
   async flag(id: string, dto: FlagGuestDto, staffId: string) {
-    await this.prisma.guest.update({
+    const before = await this.prisma.guest.findUniqueOrThrow({ where: { id } });
+    const after = await this.prisma.guest.update({
       where: { id },
       data: { isFlagged: true, flagReason: dto.reason, flaggedAt: new Date(), flaggedById: staffId },
+    });
+    const diff = fieldDiff(before, after, FLAG_FIELDS);
+    await this.auditLog.record(this.prisma, {
+      hotelId: after.hotelId,
+      actorId: staffId,
+      entity: 'Guest',
+      entityId: id,
+      action: 'FLAG',
+      before: diff.before,
+      after: diff.after,
     });
     return this.findOneWithHistory(id);
   }
 
-  async unflag(id: string) {
-    await this.prisma.guest.update({
+  async unflag(id: string, actorId: string) {
+    const before = await this.prisma.guest.findUniqueOrThrow({ where: { id } });
+    const after = await this.prisma.guest.update({
       where: { id },
       data: { isFlagged: false, flagReason: null, flaggedAt: null, flaggedById: null },
     });
+    const diff = fieldDiff(before, after, FLAG_FIELDS);
+    await this.auditLog.record(this.prisma, {
+      hotelId: after.hotelId,
+      actorId,
+      entity: 'Guest',
+      entityId: id,
+      action: 'UNFLAG',
+      before: diff.before,
+      after: diff.after,
+    });
     return this.findOneWithHistory(id);
+  }
+
+  /** Revert of a Guest CREATE — refuses if the guest has since picked up any bookings. */
+  async removeIfNoBookings(id: string) {
+    const bookingsCount = await this.prisma.booking.count({ where: { guestId: id } });
+    if (bookingsCount > 0) {
+      throw new BadRequestException({ code: 'NOT_REVERTIBLE', message: 'This guest already has bookings and can no longer be removed.' });
+    }
+    await this.prisma.guest.delete({ where: { id } });
+  }
+
+  /** Revert of Guest UPDATE/FLAG/UNFLAG — reapplies a stored field snapshot without re-logging. */
+  async restoreFields(id: string, fields: Record<string, unknown>) {
+    await this.prisma.guest.update({ where: { id }, data: fields as Prisma.GuestUpdateInput });
   }
 }

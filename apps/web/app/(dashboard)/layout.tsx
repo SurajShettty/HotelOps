@@ -10,6 +10,7 @@ import {
   CalendarRange,
   ClipboardCheck,
   DoorOpen,
+  History,
   LayoutDashboard,
   LogIn,
   LogOut,
@@ -21,6 +22,7 @@ import {
 import { clearSession, getToken, getUser, StoredUser } from '@/lib/auth';
 import { apiFetch } from '@/lib/api';
 import { HotelProvider, useCurrentHotel } from '@/lib/hotel-context';
+import { canManage, roleAtHotel, useRoleGrants } from '@/lib/roles';
 import { NotificationsBell } from '@/components/ui/notifications-bell';
 
 const NAV_ITEMS = [
@@ -36,6 +38,9 @@ const NAV_ITEMS = [
   { href: '/reports', label: 'Reports', icon: BarChart3 },
   { href: '/settings', label: 'Settings', icon: Settings },
 ];
+
+// Shown only to MANAGER/OWNER/SUPER_ADMIN — the first role-gated nav entry in the app.
+const AUDIT_LOGS_ITEM = { href: '/audit-logs', label: 'Audit Logs', icon: History };
 
 interface Hotel {
   id: string;
@@ -58,6 +63,9 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const [checkedAuth, setCheckedAuth] = useState(false);
   const [hotels, setHotels] = useState<Hotel[]>([]);
   const { hotelId, setHotelId, ready } = useCurrentHotel();
+  const roleGrants = useRoleGrants();
+  const myRole = roleAtHotel(roleGrants, hotelId);
+  const navItems = canManage(myRole) ? [...NAV_ITEMS, AUDIT_LOGS_ITEM] : NAV_ITEMS;
 
   useEffect(() => {
     if (!getToken()) {
@@ -121,7 +129,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 space-y-0.5 px-3">
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const Icon = item.icon;
             const active = pathname === item.href;
             return (

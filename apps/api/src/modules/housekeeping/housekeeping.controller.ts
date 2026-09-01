@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Query } from '@nestjs/common';
+import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { HousekeepingService } from './housekeeping.service';
 
 @Controller('housekeeping/tasks')
@@ -14,7 +15,8 @@ export class HousekeepingController {
   updateTask(
     @Param('id') id: string,
     @Body() body: { status?: 'DIRTY' | 'IN_PROGRESS' | 'INSPECTED' | 'READY'; assignedToId?: string },
+    @CurrentUser() user: CurrentUserPayload,
   ) {
-    return this.housekeepingService.updateTask(id, body);
+    return this.housekeepingService.updateTask(id, body, user.id);
   }
 }

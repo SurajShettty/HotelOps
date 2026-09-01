@@ -127,6 +127,7 @@ model User {
   roomBlocksCreated RoomBlock[]
   housekeepingTasks HousekeepingTask[]
   auditLogs         AuditLog[]
+  auditLogsReverted AuditLog[]         @relation("AuditLogRevertedBy")
   guestsFlagged     Guest[]            @relation("GuestFlaggedBy")
   roomChargesAdded  RoomCharge[]
 
@@ -376,19 +377,27 @@ model HousekeepingTask {
   @@map("housekeeping_tasks")
 }
 
+// `diff` shape convention: { before: {...} | null, after: {...} | null } —
+// only the fields that actually changed for an UPDATE; a full relevant
+// snapshot for a CREATE (before: null) or DELETE (after: null). A REVERT
+// entry stores the swapped before/after of the action it undid.
 model AuditLog {
-  id        String   @id @default(uuid())
-  hotelId   String?  @map("hotel_id")
-  actorId   String?  @map("actor_id")
-  entity    String
-  entityId  String   @map("entity_id")
-  action    String
-  diff      Json?
-  createdAt DateTime @default(now()) @map("created_at")
+  id           String    @id @default(uuid())
+  hotelId      String?   @map("hotel_id")
+  actorId      String?   @map("actor_id")
+  entity       String
+  entityId     String    @map("entity_id")
+  action       String
+  diff         Json?
+  createdAt    DateTime  @default(now()) @map("created_at")
+  revertedAt   DateTime? @map("reverted_at")
+  revertedById String?   @map("reverted_by")
 
-  hotel Hotel? @relation(fields: [hotelId], references: [id])
-  actor User?  @relation(fields: [actorId], references: [id])
+  hotel      Hotel? @relation(fields: [hotelId], references: [id])
+  actor      User?  @relation(fields: [actorId], references: [id])
+  revertedBy User?  @relation("AuditLogRevertedBy", fields: [revertedById], references: [id])
 
   @@index([entity, entityId])
+  @@index([hotelId, createdAt])
   @@map("audit_logs")
 }

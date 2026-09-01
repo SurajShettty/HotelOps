@@ -1,4 +1,5 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { PricingRulesService } from './pricing-rules.service';
 import { CreatePricingRuleDto } from './dto/create-pricing-rule.dto';
@@ -30,21 +31,21 @@ export class PricingRulesController {
 
   @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')
   @Post()
-  create(@Body() dto: CreatePricingRuleDto) {
-    return this.pricingRulesService.create(dto);
+  create(@Body() dto: CreatePricingRuleDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.pricingRulesService.create(dto, user.id);
   }
 
   @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdatePricingRuleDto) {
-    return this.pricingRulesService.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdatePricingRuleDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.pricingRulesService.update(id, dto, user.id);
   }
 
   // `hotelId` is read as a query param purely for RolesGuard scoping, same
   // convention as DELETE /rooms/block/:id.
   @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')
   @Delete(':id')
-  remove(@Param('id') id: string, @Query('hotelId') _hotelId: string) {
-    return this.pricingRulesService.remove(id);
+  remove(@Param('id') id: string, @Query('hotelId') _hotelId: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.pricingRulesService.remove(id, user.id);
   }
 }

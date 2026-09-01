@@ -25,13 +25,13 @@ export class GuestsController {
   }
 
   @Post()
-  create(@Body() dto: CreateGuestDto) {
-    return this.guestsService.create(dto);
+  create(@Body() dto: CreateGuestDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.guestsService.create(dto, user.id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateGuestDto) {
-    return this.guestsService.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdateGuestDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.guestsService.update(id, dto, user.id);
   }
 
   @Post(':id/flag')
@@ -40,7 +40,7 @@ export class GuestsController {
   }
 
   @Post(':id/unflag')
-  unflag(@Param('id') id: string) {
-    return this.guestsService.unflag(id);
+  unflag(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.guestsService.unflag(id, user.id);
   }
 }

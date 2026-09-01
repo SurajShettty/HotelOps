@@ -7,5 +7,6 @@ import { RoomsModule } from '../rooms/rooms.module';
   imports: [RoomsModule],
   controllers: [RoomBlocksController],
   providers: [RoomBlocksService],
+  exports: [RoomBlocksService],
 })
 export class RoomBlocksModule {}

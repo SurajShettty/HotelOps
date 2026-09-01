@@ -38,23 +38,23 @@ export class BookingsController {
 
   @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
   @Patch(':id')
-  update(@Param('id') id: string, @Body() dto: UpdateBookingDto) {
-    return this.bookingsService.update(id, dto);
+  update(@Param('id') id: string, @Body() dto: UpdateBookingDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.bookingsService.update(id, dto, user.id);
   }
 
   @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
   @Post(':id/extend')
-  extend(@Param('id') id: string, @Body() dto: ExtendBookingDto) {
-    return this.bookingsService.extend(id, dto);
+  extend(@Param('id') id: string, @Body() dto: ExtendBookingDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.bookingsService.extend(id, dto, user.id);
   }
 
   @Post(':id/cancel')
-  cancel(@Param('id') id: string) {
-    return this.bookingsService.cancel(id);
+  cancel(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.bookingsService.cancel(id, user.id);
   }
 
   @Post(':id/no-show')
-  noShow(@Param('id') id: string) {
-    return this.bookingsService.noShow(id);
+  noShow(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.bookingsService.noShow(id, user.id);
   }
 }
