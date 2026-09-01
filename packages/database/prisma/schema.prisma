@@ -77,6 +77,12 @@ enum PriceAdjustmentType {
   FIXED
 }
 
+enum RoomChangeType {
+  UPGRADE
+  DOWNGRADE
+  LATERAL
+}
+
 // ---------- Models ----------
 
 model Hotel {
@@ -91,15 +97,24 @@ model Hotel {
   checkOutTime    String   @default("11:00") @map("check_out_time")
   earlyCheckInFee Decimal  @default(0) @map("early_check_in_fee") @db.Decimal(10, 2)
   lateCheckOutFee Decimal  @default(0) @map("late_check_out_fee") @db.Decimal(10, 2)
-  createdAt       DateTime @default(now()) @map("created_at")
+  // Data URL (e.g. "data:image/png;base64,...") — no object storage is wired
+  // up in this app, so the logo is stored inline rather than as a file path.
+  logoUrl   String?  @map("logo_url") @db.Text
+  // When on, a housekeeping task auto-assigns to whoever HousekeepingFloorAssignment
+  // names for that room's floor (see HousekeepingService.createDirtyTask). Off by
+  // default so a hotel with no roster set up doesn't silently leave tasks assigned
+  // to nobody-in-particular — manual assignment still works either way.
+  housekeepingAutoAssignEnabled Boolean  @default(false) @map("housekeeping_auto_assign_enabled")
+  createdAt                     DateTime @default(now()) @map("created_at")
 
-  rooms          Room[]
-  roomTypes      RoomType[]
-  guests         Guest[]
-  bookings       Booking[]
-  userHotelRoles UserHotelRole[]
-  auditLogs      AuditLog[]
-  pricingRules   PricingRule[]
+  rooms                   Room[]
+  roomTypes               RoomType[]
+  guests                  Guest[]
+  bookings                Booking[]
+  userHotelRoles          UserHotelRole[]
+  auditLogs               AuditLog[]
+  pricingRules            PricingRule[]
+  housekeepingFloorRoster HousekeepingFloorAssignment[]
 
   @@map("hotels")
 }
@@ -130,6 +145,8 @@ model User {
   auditLogsReverted AuditLog[]         @relation("AuditLogRevertedBy")
   guestsFlagged     Guest[]            @relation("GuestFlaggedBy")
   roomChargesAdded  RoomCharge[]
+  roomChangesMade   RoomChangeLog[]
+  housekeepingFloorAssignments HousekeepingFloorAssignment[]
 
   @@map("users")
 }
@@ -215,11 +232,13 @@ model Room {
   floor      String?
   status     RoomStatus @default(AVAILABLE)
 
-  hotel             Hotel              @relation(fields: [hotelId], references: [id], onDelete: Cascade)
-  roomType          RoomType           @relation(fields: [roomTypeId], references: [id])
-  bookingRooms      BookingRoom[]
-  roomBlocks        RoomBlock[]
-  housekeepingTasks HousekeepingTask[]
+  hotel               Hotel              @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomType            RoomType           @relation(fields: [roomTypeId], references: [id])
+  bookingRooms        BookingRoom[]
+  roomBlocks          RoomBlock[]
+  housekeepingTasks   HousekeepingTask[]
+  roomChangesFrom     RoomChangeLog[]    @relation("RoomChangeFrom")
+  roomChangesTo       RoomChangeLog[]    @relation("RoomChangeTo")
 
   @@unique([hotelId, roomNumber])
   @@map("rooms")
@@ -261,10 +280,11 @@ model Booking {
   hotel        Hotel         @relation(fields: [hotelId], references: [id], onDelete: Cascade)
   guest        Guest         @relation(fields: [guestId], references: [id])
   createdBy    User          @relation("BookingCreatedBy", fields: [createdById], references: [id])
-  bookingRooms BookingRoom[]
-  payments     Payment[]
-  invoice      Invoice?
-  roomCharges  RoomCharge[]
+  bookingRooms   BookingRoom[]
+  payments       Payment[]
+  invoice        Invoice?
+  roomCharges    RoomCharge[]
+  roomChangeLogs RoomChangeLog[]
 
   @@index([hotelId, checkInDate, checkOutDate])
   @@map("bookings")
@@ -298,9 +318,39 @@ model BookingRoom {
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   room    Room    @relation(fields: [roomId], references: [id])
+  roomChangeLogs RoomChangeLog[]
 
   @@unique([roomId, bookingId])
   @@map("booking_rooms")
+}
+
+// One row per mid-stay room/rate change on a CHECKED_IN booking (see
+// BookingsService.changeRoom). Nights before `effectiveDate` billed at
+// `previousRate`, nights from `effectiveDate` onward at `newRate` — this is
+// what lets CheckoutService prorate a stay that changed rooms mid-way,
+// since BookingRoom itself only ever holds the current room/rate.
+model RoomChangeLog {
+  id            String         @id @default(uuid())
+  bookingId     String         @map("booking_id")
+  bookingRoomId String         @map("booking_room_id")
+  fromRoomId    String         @map("from_room_id")
+  toRoomId      String         @map("to_room_id")
+  previousRate  Decimal        @map("previous_rate") @db.Decimal(10, 2)
+  newRate       Decimal        @map("new_rate") @db.Decimal(10, 2)
+  changeType    RoomChangeType @map("change_type")
+  reason        String?
+  effectiveDate DateTime       @map("effective_date") @db.Date
+  changedById   String         @map("changed_by")
+  createdAt     DateTime       @default(now()) @map("created_at")
+
+  booking     Booking     @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  bookingRoom BookingRoom @relation(fields: [bookingRoomId], references: [id], onDelete: Cascade)
+  fromRoom    Room        @relation("RoomChangeFrom", fields: [fromRoomId], references: [id])
+  toRoom      Room        @relation("RoomChangeTo", fields: [toRoomId], references: [id])
+  changedBy   User        @relation(fields: [changedById], references: [id])
+
+  @@index([bookingId])
+  @@map("room_change_logs")
 }
 
 model RoomBlock {
@@ -375,6 +425,23 @@ model HousekeepingTask {
 
   @@index([status, priority])
   @@map("housekeeping_tasks")
+}
+
+// The floor-to-staff roster behind Hotel.housekeepingAutoAssignEnabled — one
+// staff member per floor per hotel. HousekeepingService reads this when a
+// room goes DIRTY to auto-assign its task; it's otherwise just a lookup
+// table with no behavior of its own.
+model HousekeepingFloorAssignment {
+  id      String @id @default(uuid())
+  hotelId String @map("hotel_id")
+  floor   String
+  userId  String @map("user_id")
+
+  hotel Hotel @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([hotelId, floor])
+  @@map("housekeeping_floor_assignments")
 }
 
 // `diff` shape convention: { before: {...} | null, after: {...} | null } —

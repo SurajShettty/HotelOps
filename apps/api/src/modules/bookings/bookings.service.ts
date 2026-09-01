@@ -3,11 +3,14 @@ import { Prisma } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AvailabilityService } from '../rooms/availability.service';
 import { normalizePagination } from '../../common/pagination';
+import { todayUtcDateOnly } from '../../common/date.util';
 import { AuditLogService } from '../audit-logs/audit-log.service';
+import { HousekeepingService } from '../housekeeping/housekeeping.service';
 import { GUEST_LOYALTY_INCLUDE, withGuestLoyaltyBadge } from '../guests/guest-loyalty';
 import { BookingRoomInput, CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
 import { ExtendBookingDto } from './dto/extend-booking.dto';
+import { ChangeRoomBookingDto } from './dto/change-room-booking.dto';
 
 const ACTIVE_STATUSES_BLOCKING_CANCEL = ['CHECKED_IN', 'CHECKED_OUT', 'COMPLETED'];
 const EDITABLE_STATUSES = ['DRAFT', 'CONFIRMED'];
@@ -30,6 +33,7 @@ export class BookingsService {
     private readonly prisma: PrismaService,
     private readonly availabilityService: AvailabilityService,
     private readonly auditLog: AuditLogService,
+    private readonly housekeepingService: HousekeepingService,
   ) {}
 
   /** Rejects any room assignment whose occupant count exceeds that room type's max occupancy. */
@@ -147,7 +151,11 @@ export class BookingsService {
         where,
         skip,
         take,
-        include: { bookingRooms: { include: { room: true } }, guest: { include: GUEST_LOYALTY_INCLUDE } },
+        include: {
+          bookingRooms: { include: { room: true } },
+          guest: { include: GUEST_LOYALTY_INCLUDE },
+          invoice: { select: { id: true } },
+        },
         orderBy: { createdAt: 'desc' },
       }),
       this.prisma.booking.count({ where }),
@@ -346,7 +354,7 @@ export class BookingsService {
         const oldRoomId = existing.bookingRooms[0].roomId;
         await tx.bookingRoom.update({ where: { id: existing.bookingRooms[0].id }, data: { roomId: dto.roomId! } });
         await tx.room.update({ where: { id: oldRoomId }, data: { status: 'DIRTY' } });
-        await tx.housekeepingTask.create({ data: { roomId: oldRoomId, status: 'DIRTY', priority: 1 } });
+        await this.housekeepingService.createDirtyTask(tx, { roomId: oldRoomId, priority: 1 });
         await tx.room.update({ where: { id: dto.roomId! }, data: { status: 'OCCUPIED' } });
       }
 
@@ -364,6 +372,96 @@ export class BookingsService {
         action: 'EXTEND',
         before: { checkOutDate: toDateOnly(existing.checkOutDate), rooms: roomsSnapshot(existing.bookingRooms) },
         after: { checkOutDate: toDateOnly(updated.checkOutDate), rooms: roomsSnapshot(updated.bookingRooms) },
+      });
+
+      return updated;
+    });
+  }
+
+  /**
+   * Upgrade/downgrade a single room within a CHECKED_IN booking. Unlike
+   * extend()'s room move, this re-prices — but only from today onward: a
+   * RoomChangeLog row records the split so CheckoutService can bill nights
+   * already stayed at the old rate and the rest at the new one, since
+   * BookingRoom itself only ever holds the current room/rate.
+   */
+  async changeRoom(id: string, dto: ChangeRoomBookingDto, actorId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.booking.findUnique({ where: { id }, include: { bookingRooms: true } });
+      if (!existing) throw new NotFoundException('Booking not found');
+      if (existing.hotelId !== dto.hotelId) {
+        throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Booking does not belong to this hotel' });
+      }
+      if (existing.status !== 'CHECKED_IN') {
+        throw new ConflictException({ code: 'INVALID_STATE', message: `Booking must be CHECKED_IN to change rooms, got ${existing.status}` });
+      }
+
+      const bookingRoom = existing.bookingRooms.find((br) => br.id === dto.bookingRoomId);
+      if (!bookingRoom) throw new NotFoundException('This room is not part of the booking');
+
+      const effectiveDate = todayUtcDateOnly();
+      if (effectiveDate >= existing.checkOutDate) {
+        throw new BadRequestException({
+          code: 'VALIDATION_ERROR',
+          message: 'This booking is at or past its check-out date — extend the stay before changing rooms.',
+        });
+      }
+
+      if (dto.newRoomId === bookingRoom.roomId) {
+        throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Already assigned to this room' });
+      }
+
+      const newRoom = await tx.room.findUnique({ where: { id: dto.newRoomId }, include: { roomType: true } });
+      if (!newRoom || newRoom.hotelId !== dto.hotelId) {
+        throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Room does not belong to this hotel' });
+      }
+      this.assertWithinCapacity([{ roomId: newRoom.id, rate: dto.newRate, occupants: bookingRoom.occupants }], [newRoom]);
+
+      await this.availabilityService.assertRoomsAvailable(tx, {
+        roomIds: [dto.newRoomId],
+        checkIn: effectiveDate,
+        checkOut: existing.checkOutDate,
+        excludeBookingId: id,
+      });
+
+      const previousRate = bookingRoom.rateApplied;
+      const changeType = dto.newRate > Number(previousRate) ? 'UPGRADE' : dto.newRate < Number(previousRate) ? 'DOWNGRADE' : 'LATERAL';
+      const oldRoomId = bookingRoom.roomId;
+
+      await tx.bookingRoom.update({ where: { id: bookingRoom.id }, data: { roomId: dto.newRoomId, rateApplied: dto.newRate } });
+
+      await tx.roomChangeLog.create({
+        data: {
+          bookingId: id,
+          bookingRoomId: bookingRoom.id,
+          fromRoomId: oldRoomId,
+          toRoomId: dto.newRoomId,
+          previousRate,
+          newRate: dto.newRate,
+          changeType,
+          reason: dto.reason,
+          effectiveDate,
+          changedById: actorId,
+        },
+      });
+
+      await tx.room.update({ where: { id: oldRoomId }, data: { status: 'DIRTY' } });
+      await this.housekeepingService.createDirtyTask(tx, { roomId: oldRoomId, priority: 1 });
+      await tx.room.update({ where: { id: dto.newRoomId }, data: { status: 'OCCUPIED' } });
+
+      const updated = await tx.booking.findUniqueOrThrow({
+        where: { id },
+        include: { bookingRooms: { include: { room: true } }, guest: true },
+      });
+
+      await this.auditLog.record(tx, {
+        hotelId: existing.hotelId,
+        actorId,
+        entity: 'Booking',
+        entityId: id,
+        action: changeType === 'UPGRADE' ? 'ROOM_UPGRADE' : changeType === 'DOWNGRADE' ? 'ROOM_DOWNGRADE' : 'ROOM_CHANGE',
+        before: { roomId: oldRoomId, rate: Number(previousRate) },
+        after: { roomId: dto.newRoomId, rate: dto.newRate, reason: dto.reason ?? null },
       });
 
       return updated;

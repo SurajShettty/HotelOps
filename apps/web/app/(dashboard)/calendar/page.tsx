@@ -12,6 +12,37 @@ import { GuestPicker, PickedGuest } from '@/components/ui/guest-picker';
 
 const DAYS_SHOWN = 14;
 
+// Every popover below is `position: fixed` and anchored from a clicked/hovered
+// cell's rect — clamped against these so it can never run off the bottom or
+// right edge of the viewport for a cell in the last row/column, the same way
+// `left` was already (partly) clamped before. EmptyCellPopover's three views
+// (menu/reserve-or-checkin/block) differ a lot in size, so each computes its
+// *own* anchor from the raw clicked-cell rect rather than sharing one anchor
+// sized for the worst case — otherwise the menu (small) would sit clamped far
+// from the click point whenever the cell is anywhere near the bottom, since
+// the shared clamp has to assume it might grow into the much taller reserve
+// form. `overflow-y-auto` + matching `maxHeight` on each popover is the
+// backstop for when actual content still exceeds its estimate.
+const POPOVER_MARGIN = 16;
+const HOVER_PREVIEW_SIZE = { width: 288, height: 200 };
+const CELL_ACTION_POPOVER_SIZE = { width: 256, height: 160 };
+const MENU_POPOVER_SIZE = { width: 208, height: 190 };
+const BLOCK_FORM_SIZE = { width: 256, height: 230 };
+const RESERVE_FORM_SIZE = { width: 320, height: 440 };
+
+function clampTop(bottom: number, gap: number, height: number) {
+  return Math.max(POPOVER_MARGIN, Math.min(bottom + gap, window.innerHeight - height - POPOVER_MARGIN));
+}
+
+function clampLeft(left: number, width: number) {
+  return Math.max(POPOVER_MARGIN, Math.min(left, window.innerWidth - width - POPOVER_MARGIN));
+}
+
+/** Anchors a popover of `size` to sit just below `cellRect`, clamped to stay fully on-screen. */
+function popoverAnchor(cellRect: { bottom: number; left: number }, size: { width: number; height: number }, gap = 4): Anchor {
+  return { top: clampTop(cellRect.bottom, gap, size.height), left: clampLeft(cellRect.left, size.width) };
+}
+
 interface RoomType {
   id: string;
   name: string;
@@ -52,6 +83,11 @@ interface RoomBlock {
 
 interface Anchor {
   top: number;
+  left: number;
+}
+
+interface CellRect {
+  bottom: number;
   left: number;
 }
 
@@ -104,14 +140,14 @@ function BlockForm({
   hotelId,
   roomId,
   date,
-  anchor,
+  cellRect,
   onDone,
   onCancel,
 }: {
   hotelId: string;
   roomId: string;
   date: string;
-  anchor: Anchor;
+  cellRect: CellRect;
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -119,6 +155,7 @@ function BlockForm({
   const [endDate, setEndDate] = useState(toDateOnly(addDays(new Date(date), 1)));
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const anchor = popoverAnchor(cellRect, BLOCK_FORM_SIZE);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -145,8 +182,8 @@ function BlockForm({
       <div className="fixed inset-0 z-40" onClick={onCancel} />
       <form
         onSubmit={handleSubmit}
-        style={{ top: anchor.top, left: anchor.left }}
-        className="fixed z-50 w-64 space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
+        style={{ top: anchor.top, left: anchor.left, maxHeight: BLOCK_FORM_SIZE.height }}
+        className="fixed z-50 w-64 space-y-2 overflow-y-auto rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
       >
         {error && <ErrorBanner>{error}</ErrorBanner>}
         <p className="text-xs font-medium text-slate-500">Block from {date}</p>
@@ -185,7 +222,7 @@ function ReserveOrCheckinForm({
   room,
   date,
   mode,
-  anchor,
+  cellRect,
   onCancel,
   onDone,
 }: {
@@ -193,10 +230,11 @@ function ReserveOrCheckinForm({
   room: Room;
   date: string;
   mode: 'reserve' | 'checkin';
-  anchor: Anchor;
+  cellRect: CellRect;
   onCancel: () => void;
   onDone: () => void;
 }) {
+  const anchor = popoverAnchor(cellRect, RESERVE_FORM_SIZE);
   const [pickedGuest, setPickedGuest] = useState<PickedGuest | null>(null);
   const [checkOutDate, setCheckOutDate] = useState(toDateOnly(addDays(new Date(date), 1)));
   const [occupants, setOccupants] = useState('1');
@@ -303,8 +341,8 @@ function ReserveOrCheckinForm({
       <div className="fixed inset-0 z-40" onClick={onCancel} />
       <form
         onSubmit={handleSubmit}
-        style={{ top: anchor.top, left: anchor.left }}
-        className="fixed z-50 w-80 space-y-3 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
+        style={{ top: anchor.top, left: anchor.left, maxHeight: RESERVE_FORM_SIZE.height }}
+        className="fixed z-50 w-80 space-y-3 overflow-y-auto rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
       >
         {error && <ErrorBanner>{error}</ErrorBanner>}
         <p className="text-xs font-medium text-slate-500">
@@ -380,7 +418,7 @@ function EmptyCellPopover({
   room,
   date,
   isToday,
-  anchor,
+  cellRect,
   onCancel,
   onDone,
 }: {
@@ -388,14 +426,14 @@ function EmptyCellPopover({
   room: Room;
   date: string;
   isToday: boolean;
-  anchor: Anchor;
+  cellRect: CellRect;
   onCancel: () => void;
   onDone: () => void;
 }) {
   const [view, setView] = useState<'menu' | 'reserve' | 'checkin' | 'block'>('menu');
 
   if (view === 'block') {
-    return <BlockForm hotelId={hotelId} roomId={room.id} date={date} anchor={anchor} onCancel={() => setView('menu')} onDone={onDone} />;
+    return <BlockForm hotelId={hotelId} roomId={room.id} date={date} cellRect={cellRect} onCancel={() => setView('menu')} onDone={onDone} />;
   }
   if (view === 'reserve' || view === 'checkin') {
     return (
@@ -404,19 +442,21 @@ function EmptyCellPopover({
         room={room}
         date={date}
         mode={view}
-        anchor={anchor}
+        cellRect={cellRect}
         onCancel={() => setView('menu')}
         onDone={onDone}
       />
     );
   }
 
+  const anchor = popoverAnchor(cellRect, MENU_POPOVER_SIZE);
+
   return createPortal(
     <>
       <div className="fixed inset-0 z-40" onClick={onCancel} />
       <div
-        style={{ top: anchor.top, left: anchor.left }}
-        className="fixed z-50 w-52 space-y-0.5 rounded-lg border border-slate-200 bg-white p-1.5 text-left shadow-popover"
+        style={{ top: anchor.top, left: anchor.left, maxHeight: MENU_POPOVER_SIZE.height }}
+        className="fixed z-50 w-52 space-y-0.5 overflow-y-auto rounded-lg border border-slate-200 bg-white p-1.5 text-left shadow-popover"
       >
         <button
           type="button"
@@ -490,8 +530,8 @@ function CellActionPopover({
     <>
       <div className="fixed inset-0 z-40" onClick={onCancel} />
       <div
-        style={{ top: anchor.top, left: anchor.left }}
-        className="fixed z-50 w-64 space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
+        style={{ top: anchor.top, left: anchor.left, maxHeight: CELL_ACTION_POPOVER_SIZE.height }}
+        className="fixed z-50 w-64 space-y-2 overflow-y-auto rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
       >
         {error && <ErrorBanner>{error}</ErrorBanner>}
         <p className="text-xs font-medium text-slate-500">{info.kind === 'booking' ? 'Booking' : 'Block'}</p>
@@ -527,8 +567,8 @@ function formatDate(iso: string) {
 function HoverPreview({ anchor, children }: { anchor: Anchor; children: React.ReactNode }) {
   return createPortal(
     <div
-      style={{ top: anchor.top, left: anchor.left }}
-      className="pointer-events-none fixed z-50 w-72 space-y-2 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
+      style={{ top: anchor.top, left: anchor.left, maxHeight: HOVER_PREVIEW_SIZE.height }}
+      className="pointer-events-none fixed z-50 w-72 space-y-2 overflow-y-auto rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
     >
       {children}
     </div>,
@@ -543,7 +583,7 @@ export default function CalendarPage() {
   const [blocks, setBlocks] = useState<RoomBlock[]>([]);
   const [loading, setLoading] = useState(true);
   const [startDate, setStartDate] = useState(() => new Date(new Date().toDateString()));
-  const [activeCell, setActiveCell] = useState<{ roomId: string; date: string; anchor: Anchor } | null>(null);
+  const [activeCell, setActiveCell] = useState<{ roomId: string; date: string; cellRect: CellRect } | null>(null);
   const [activeAction, setActiveAction] = useState<{
     cellKey: string;
     info: CellInfo;
@@ -565,9 +605,7 @@ export default function CalendarPage() {
   // is just passing through a row of cells on its way somewhere else.
   function handleCellMouseEnter(e: React.MouseEvent<HTMLElement>, cellKey: string, kind: 'booking' | 'block', id: string) {
     const rect = e.currentTarget.getBoundingClientRect();
-    const PREVIEW_WIDTH = 288;
-    const left = Math.min(rect.left, window.innerWidth - PREVIEW_WIDTH - 16);
-    const anchor = { top: rect.bottom + 6, left };
+    const anchor = popoverAnchor({ bottom: rect.bottom, left: rect.left }, HOVER_PREVIEW_SIZE, 6);
     if (hoverTimer.current) clearTimeout(hoverTimer.current);
     hoverTimer.current = setTimeout(() => setHoveredCell({ cellKey, kind, id, anchor }), 200);
   }
@@ -728,9 +766,8 @@ export default function CalendarPage() {
                 return;
               }
               const rect = e.currentTarget.getBoundingClientRect();
-              const POPOVER_WIDTH = 256;
-              const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
-              setActiveAction({ cellKey, info, anchor: { top: rect.bottom + 4, left } });
+              const anchor = popoverAnchor({ bottom: rect.bottom, left: rect.left }, CELL_ACTION_POPOVER_SIZE);
+              setActiveAction({ cellKey, info, anchor });
             }}
             className={`w-full cursor-pointer ${cellStyle}`}
           >
@@ -934,12 +971,10 @@ export default function CalendarPage() {
                                 return;
                               }
                               const rect = e.currentTarget.getBoundingClientRect();
-                              // Sized for the widest popover state (the reserve/check-in
-                              // form), not just the initial menu, so switching views can't
-                              // push it past the right edge of the viewport.
-                              const POPOVER_WIDTH = 320;
-                              const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
-                              setActiveCell({ roomId: room.id, date: iso, anchor: { top: rect.bottom + 4, left } });
+                              // Raw rect only — each view (menu, reserve/checkin, block)
+                              // computes its own clamped anchor from this, sized to its own
+                              // footprint instead of one shared worst-case size.
+                              setActiveCell({ roomId: room.id, date: iso, cellRect: { bottom: rect.bottom, left: rect.left } });
                             }}
                             className="h-8 w-full rounded-md hover:bg-slate-100"
                           />
@@ -950,7 +985,7 @@ export default function CalendarPage() {
                             room={room}
                             date={iso}
                             isToday={iso === todayIso}
-                            anchor={activeCell.anchor}
+                            cellRect={activeCell.cellRect}
                             onCancel={() => setActiveCell(null)}
                             onDone={() => {
                               setActiveCell(null);

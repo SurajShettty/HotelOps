@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Bell, Building2, Check, Percent, Pencil, Plus, ShieldCheck, Sparkles, Trash2, Users } from 'lucide-react';
+import { Bell, Building2, Check, ChevronDown, ClipboardList, ImageOff, Percent, Pencil, Plus, ShieldCheck, Sparkles, Trash2, Users, UserRound } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
@@ -15,7 +15,27 @@ interface Hotel {
   checkOutTime: string;
   earlyCheckInFee: string;
   lateCheckOutFee: string;
+  logoUrl: string | null;
+  housekeepingAutoAssignEnabled: boolean;
 }
+
+/** Small pill toggle — this codebase otherwise only has plain checkboxes, but "switch" reads better for a hotel-wide feature flag. */
+function Switch({ checked, onChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${checked ? 'bg-brand-800' : 'bg-slate-200'}`}
+    >
+      <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
+    </button>
+  );
+}
+
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
 interface RoomType {
   id: string;
@@ -39,6 +59,7 @@ function HotelProfileCard() {
   const [checkOutTime, setCheckOutTime] = useState('');
   const [earlyCheckInFee, setEarlyCheckInFee] = useState('');
   const [lateCheckOutFee, setLateCheckOutFee] = useState('');
+  const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -53,8 +74,27 @@ function HotelProfileCard() {
       setCheckOutTime(h.checkOutTime);
       setEarlyCheckInFee(String(Number(h.earlyCheckInFee)));
       setLateCheckOutFee(String(Number(h.lateCheckOutFee)));
+      setLogoUrl(h.logoUrl);
     });
   }, [hotelId]);
+
+  function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setError(null);
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      setError('Logo must be a PNG or JPEG image');
+      return;
+    }
+    if (file.size > MAX_LOGO_BYTES) {
+      setError('Logo image must be under 2MB');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => setLogoUrl(reader.result as string);
+    reader.readAsDataURL(file);
+  }
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -72,6 +112,7 @@ function HotelProfileCard() {
           checkOutTime,
           earlyCheckInFee: Number(earlyCheckInFee || 0),
           lateCheckOutFee: Number(lateCheckOutFee || 0),
+          logoUrl,
         }),
       });
       setHotel(updated);
@@ -99,6 +140,31 @@ function HotelProfileCard() {
       </div>
       <form onSubmit={handleSave} className="space-y-3">
         {error && <ErrorBanner>{error}</ErrorBanner>}
+        <div>
+          <Label htmlFor="hotel-logo">Logo</Label>
+          <div className="flex items-center gap-3">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              {logoUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={logoUrl} alt="Hotel logo" className="h-full w-full object-contain" />
+              ) : (
+                <ImageOff className="h-5 w-5 text-slate-300" />
+              )}
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="inline-flex w-fit cursor-pointer items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                {logoUrl ? 'Replace logo' : 'Upload logo'}
+                <input id="hotel-logo" type="file" accept="image/png,image/jpeg" onChange={handleLogoChange} className="hidden" />
+              </label>
+              {logoUrl && (
+                <button type="button" onClick={() => setLogoUrl(null)} className="text-left text-xs text-slate-400 hover:text-rose-600">
+                  Remove logo
+                </button>
+              )}
+              <p className="text-xs text-slate-400">PNG or JPEG, up to 2MB. Appears on invoices.</p>
+            </div>
+          </div>
+        </div>
         <div>
           <Label htmlFor="hotel-name">Name</Label>
           <Input id="hotel-name" required value={name} onChange={(e) => setName(e.target.value)} />
@@ -150,6 +216,171 @@ function HotelProfileCard() {
           {saved ? <><Check className="h-4 w-4" /> Saved</> : saving ? 'Saving…' : 'Save changes'}
         </Button>
       </form>
+    </Card>
+  );
+}
+
+function initials(name: string) {
+  return name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+}
+
+interface FloorAssignment {
+  id: string;
+  floor: string;
+  userId: string;
+  user: { id: string; fullName: string };
+}
+
+interface HousekeepingStaff {
+  id: string;
+  fullName: string;
+  roles: { role: string }[];
+}
+
+function HousekeepingRosterCard() {
+  const { hotelId } = useCurrentHotel();
+  const [autoAssignEnabled, setAutoAssignEnabled] = useState(false);
+  const [togglingAutoAssign, setTogglingAutoAssign] = useState(false);
+  const [floors, setFloors] = useState<string[]>([]);
+  const [staff, setStaff] = useState<HousekeepingStaff[]>([]);
+  const [assignments, setAssignments] = useState<FloorAssignment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingFloor, setSavingFloor] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function reload() {
+    if (!hotelId) return;
+    setLoading(true);
+    Promise.all([
+      apiFetch<Hotel>(`/hotels/${hotelId}`),
+      apiFetch<{ floor: string | null }[]>(`/rooms?hotelId=${hotelId}`),
+      apiFetch<HousekeepingStaff[]>(`/users?hotelId=${hotelId}`),
+      apiFetch<FloorAssignment[]>(`/housekeeping/floor-assignments?hotelId=${hotelId}`),
+    ])
+      .then(([hotel, rooms, users, roster]) => {
+        setAutoAssignEnabled(hotel.housekeepingAutoAssignEnabled);
+        setFloors(
+          Array.from(new Set(rooms.map((r) => r.floor).filter((f): f is string => !!f))).sort((a, b) =>
+            a.localeCompare(b, undefined, { numeric: true }),
+          ),
+        );
+        setStaff(users.filter((u) => u.roles.some((r) => r.role === 'HOUSEKEEPING')));
+        setAssignments(roster);
+      })
+      .catch(() => setError('Failed to load housekeeping roster'))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(reload, [hotelId]);
+
+  async function toggleAutoAssign(next: boolean) {
+    if (!hotelId) return;
+    setTogglingAutoAssign(true);
+    setError(null);
+    try {
+      await apiFetch(`/hotels/${hotelId}`, { method: 'PATCH', body: JSON.stringify({ housekeepingAutoAssignEnabled: next }) });
+      setAutoAssignEnabled(next);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to update setting');
+    } finally {
+      setTogglingAutoAssign(false);
+    }
+  }
+
+  async function assignFloor(floor: string, userId: string) {
+    if (!hotelId) return;
+    setSavingFloor(floor);
+    setError(null);
+    try {
+      const existing = assignments.find((a) => a.floor === floor);
+      if (!userId) {
+        if (existing) await apiFetch(`/housekeeping/floor-assignments/${existing.id}?hotelId=${hotelId}`, { method: 'DELETE' });
+      } else {
+        await apiFetch('/housekeeping/floor-assignments', { method: 'POST', body: JSON.stringify({ hotelId, floor, userId }) });
+      }
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to update assignment');
+    } finally {
+      setSavingFloor(null);
+    }
+  }
+
+  return (
+    <Card className="p-5">
+      <div className="mb-3 flex items-center gap-2">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+          <ClipboardList className="h-4 w-4" />
+        </div>
+        <div>
+          <div className="font-medium text-slate-900">Housekeeping Assignment</div>
+          <p className="text-sm text-slate-500">Assign one housekeeping staff member per floor.</p>
+        </div>
+      </div>
+
+      {error && <div className="mb-3"><ErrorBanner>{error}</ErrorBanner></div>}
+
+      <div className="mb-4 flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+        <div>
+          <p className="text-sm font-medium text-slate-900">Auto-assign on checkout</p>
+          <p className="text-xs text-slate-500">
+            When on, a room's housekeeping task is assigned automatically to that floor's staff below as soon as it goes dirty.
+          </p>
+        </div>
+        <Switch checked={autoAssignEnabled} onChange={toggleAutoAssign} disabled={togglingAutoAssign} />
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-400">Loading…</p>
+      ) : staff.length === 0 ? (
+        <p className="text-sm text-slate-400">No staff with the Housekeeping role yet — add one under Users &amp; Roles.</p>
+      ) : floors.length === 0 ? (
+        <p className="text-sm text-slate-400">No rooms have a floor set yet — add floors from the Rooms page.</p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {floors.map((floor) => {
+            const current = assignments.find((a) => a.floor === floor);
+            const assignedStaff = current ? staff.find((s) => s.id === current.userId) ?? null : null;
+            return (
+              <li key={floor} className="flex items-center justify-between gap-3 py-2.5">
+                <div className="flex items-center gap-2.5">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-xs font-semibold text-slate-600">
+                    {floor}
+                  </span>
+                  <span className="text-sm font-medium text-slate-900">Floor {floor}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${
+                      assignedStaff ? 'bg-brand-100 text-brand-700' : 'bg-slate-100 text-slate-400'
+                    }`}
+                  >
+                    {assignedStaff ? initials(assignedStaff.fullName) : <UserRound className="h-3.5 w-3.5" />}
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={current?.userId ?? ''}
+                      onChange={(e) => assignFloor(floor, e.target.value)}
+                      disabled={savingFloor === floor}
+                      className={`w-44 cursor-pointer appearance-none truncate rounded-full border py-1.5 pl-3 pr-8 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:opacity-50 ${
+                        assignedStaff
+                          ? 'border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100'
+                          : 'border-dashed border-slate-300 bg-white text-slate-400 hover:border-slate-400'
+                      }`}
+                    >
+                      <option value="">Unassigned</option>
+                      {staff.map((s) => (
+                        <option key={s.id} value={s.id}>{s.fullName}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 opacity-60" />
+                  </div>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </Card>
   );
 }
@@ -900,6 +1131,7 @@ export default function SettingsPage() {
       <div className="grid gap-4 md:grid-cols-2">
         <HotelProfileCard />
         <RoomTypesCard />
+        <HousekeepingRosterCard />
         <PricingRulesCard />
         <UsersRolesCard />
         {UNAVAILABLE_SECTIONS.map(({ name, icon: Icon, note }) => (

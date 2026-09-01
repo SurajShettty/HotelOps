@@ -47,4 +47,9 @@ export class ReportsController {
   ) {
     return this.reportsService.housekeeping(hotelId, new Date(from), new Date(to), page, pageSize);
   }
+
+  @Get('housekeeping/by-staff')
+  housekeepingByStaff(@Query('hotelId') hotelId: string, @Query('from') from: string, @Query('to') to: string) {
+    return this.reportsService.housekeepingByStaff(hotelId, new Date(from), new Date(to));
+  }
 }

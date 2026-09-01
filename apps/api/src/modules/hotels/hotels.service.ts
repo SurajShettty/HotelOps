@@ -12,7 +12,24 @@ interface HotelPolicyFields {
   lateCheckOutFee?: number;
 }
 
-const HOTEL_FIELDS = ['name', 'timezone', 'address', 'checkInTime', 'checkOutTime', 'earlyCheckInFee', 'lateCheckOutFee'] as const;
+const HOTEL_FIELDS = [
+  'name',
+  'timezone',
+  'address',
+  'checkInTime',
+  'checkOutTime',
+  'earlyCheckInFee',
+  'lateCheckOutFee',
+  'logoUrl',
+  'housekeepingAutoAssignEnabled',
+] as const;
+
+// PNG/JPEG only — pdfkit's doc.image() (used to place this on invoices)
+// can't render WebP or SVG.
+const LOGO_DATA_URL_PATTERN = /^data:image\/(png|jpe?g);base64,/;
+// Comfortably above a compressed logo, well below what'd bloat every hotel
+// row and audit-log snapshot that includes it.
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
 
 @Injectable()
 export class HotelsService {
@@ -40,6 +57,18 @@ export class HotelsService {
     }
   }
 
+  private assertValidLogo(logoUrl: string | null | undefined) {
+    if (logoUrl === undefined || logoUrl === null) return;
+    if (!LOGO_DATA_URL_PATTERN.test(logoUrl)) {
+      throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'logoUrl must be a PNG or JPEG data URL' });
+    }
+    const base64 = logoUrl.slice(logoUrl.indexOf(',') + 1);
+    const approxBytes = (base64.length * 3) / 4;
+    if (approxBytes > MAX_LOGO_BYTES) {
+      throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Logo image must be under 2MB' });
+    }
+  }
+
   findAll() {
     return this.prisma.hotel.findMany();
   }
@@ -48,8 +77,18 @@ export class HotelsService {
     return this.prisma.hotel.findUniqueOrThrow({ where: { id } });
   }
 
-  async create(data: { name: string; timezone?: string; address?: Prisma.InputJsonValue } & HotelPolicyFields, actorId: string) {
+  async create(
+    data: {
+      name: string;
+      timezone?: string;
+      address?: Prisma.InputJsonValue;
+      logoUrl?: string;
+      housekeepingAutoAssignEnabled?: boolean;
+    } & HotelPolicyFields,
+    actorId: string,
+  ) {
     this.assertValidPolicy(data);
+    this.assertValidLogo(data.logoUrl);
     const hotel = await this.prisma.hotel.create({ data });
     await this.auditLog.record(this.prisma, {
       hotelId: hotel.id,
@@ -62,8 +101,21 @@ export class HotelsService {
     return hotel;
   }
 
-  async update(id: string, data: Partial<{ name: string; timezone: string; address: Prisma.InputJsonValue } & HotelPolicyFields>, actorId: string) {
+  async update(
+    id: string,
+    data: Partial<
+      {
+        name: string;
+        timezone: string;
+        address: Prisma.InputJsonValue;
+        logoUrl: string | null;
+        housekeepingAutoAssignEnabled: boolean;
+      } & HotelPolicyFields
+    >,
+    actorId: string,
+  ) {
     this.assertValidPolicy(data);
+    this.assertValidLogo(data.logoUrl);
     const before = await this.prisma.hotel.findUniqueOrThrow({ where: { id } });
     const after = await this.prisma.hotel.update({ where: { id }, data });
     const diff = fieldDiff(before, after, HOTEL_FIELDS);

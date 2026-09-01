@@ -30,6 +30,8 @@ export class HotelsController {
       checkOutTime?: string;
       earlyCheckInFee?: number;
       lateCheckOutFee?: number;
+      logoUrl?: string;
+      housekeepingAutoAssignEnabled?: boolean;
     },
     @CurrentUser() user: CurrentUserPayload,
   ) {
@@ -51,6 +53,8 @@ export class HotelsController {
       checkOutTime: string;
       earlyCheckInFee: number;
       lateCheckOutFee: number;
+      logoUrl: string | null;
+      housekeepingAutoAssignEnabled: boolean;
     }>,
     @CurrentUser() user: CurrentUserPayload,
   ) {

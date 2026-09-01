@@ -14,6 +14,11 @@ function money(n: number | string | { toString(): string }) {
   return Number(n.toString()).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+/** Strips characters that are invalid (or awkward) in a downloaded filename on Windows/macOS/Linux. */
+function sanitizeFilenamePart(s: string): string {
+  return s.replace(/[\\/:*?"<>|]/g, '').trim();
+}
+
 @Injectable()
 export class InvoicesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -53,7 +58,15 @@ export class InvoicesService {
     doc.on('data', (chunk) => chunks.push(chunk));
     const done = new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
 
-    doc.fontSize(18).text(booking.hotel.name, { continued: false });
+    const logoMatch = booking.hotel.logoUrl?.match(/^data:image\/(?:png|jpe?g);base64,(.+)$/);
+    const headerTop = doc.y;
+    const nameX = logoMatch ? 108 : 50;
+    if (logoMatch) {
+      doc.image(Buffer.from(logoMatch[1], 'base64'), 50, headerTop, { fit: [50, 50] });
+    }
+    doc.fontSize(18).text(booking.hotel.name, nameX, headerTop, { width: 495 - (nameX - 50) });
+    doc.x = 50;
+    doc.y = Math.max(doc.y, headerTop + (logoMatch ? 50 : 0));
     doc.moveDown(0.2);
     doc.fontSize(20).text('Invoice', { align: 'right' });
     doc.fontSize(9).fillColor('#666').text(`Invoice #${invoice.id.slice(0, 8).toUpperCase()}`, { align: 'right' });
@@ -110,6 +123,9 @@ export class InvoicesService {
 
     doc.end();
     const buffer = await done;
-    return { filename: `invoice-${invoice.id.slice(0, 8)}.pdf`, buffer };
+    const guestName = sanitizeFilenamePart(booking.guest.fullName) || 'Guest';
+    const checkIn = booking.checkInDate.toISOString().slice(0, 10);
+    const checkOut = booking.checkOutDate.toISOString().slice(0, 10);
+    return { filename: `${guestName}_${checkIn}_${checkOut}.pdf`, buffer };
   }
 }

@@ -3,6 +3,7 @@ import { Prisma } from '@hotelops/database';
 import { addDaysUtc, differenceInCalendarDays, localTimeHHmm, todayUtcDateOnly } from '../../common/date.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogService } from '../audit-logs/audit-log.service';
+import { HousekeepingService } from '../housekeeping/housekeeping.service';
 import { CheckoutDto, LineItem } from './dto/checkout.dto';
 import { PreviewFolioDto } from './dto/preview-folio.dto';
 
@@ -13,6 +14,7 @@ export class CheckoutService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly housekeepingService: HousekeepingService,
   ) {}
 
   /**
@@ -45,7 +47,37 @@ export class CheckoutService {
     const actualCheckOut = today > minCheckOut ? today : minCheckOut;
 
     const nights = differenceInCalendarDays(actualCheckOut, booking.checkInDate);
-    const roomSubtotal = booking.bookingRooms.reduce((sum, br) => sum + Number(br.rateApplied) * nights, 0);
+
+    // A room changed mid-stay (see BookingsService.changeRoom) leaves behind
+    // RoomChangeLog rows — nights before each change's effectiveDate billed
+    // at that change's previousRate, everything from the last change onward
+    // (or the whole stay, if there were no changes) at the room's current rateApplied.
+    const changeLogs = await client.roomChangeLog.findMany({
+      where: { bookingId },
+      orderBy: { effectiveDate: 'asc' },
+    });
+    const logsByBookingRoom = new Map<string, typeof changeLogs>();
+    for (const log of changeLogs) {
+      const list = logsByBookingRoom.get(log.bookingRoomId) ?? [];
+      list.push(log);
+      logsByBookingRoom.set(log.bookingRoomId, list);
+    }
+
+    const roomSubtotal = booking.bookingRooms.reduce((sum, br) => {
+      const logs = logsByBookingRoom.get(br.id);
+      if (!logs || logs.length === 0) {
+        return sum + Number(br.rateApplied) * nights;
+      }
+
+      let cursor = booking.checkInDate;
+      let total = 0;
+      for (const log of logs) {
+        total += differenceInCalendarDays(log.effectiveDate, cursor) * Number(log.previousRate);
+        cursor = log.effectiveDate;
+      }
+      total += differenceInCalendarDays(actualCheckOut, cursor) * Number(br.rateApplied);
+      return sum + total;
+    }, 0);
 
     // Incidentals logged during the stay (see RoomChargesModule) are folded
     // into the same total as any one-off charge typed in at checkout — the
@@ -162,7 +194,7 @@ export class CheckoutService {
 
       for (const br of booking.bookingRooms) {
         await tx.room.update({ where: { id: br.roomId }, data: { status: 'DIRTY' } });
-        await tx.housekeepingTask.create({ data: { roomId: br.roomId, status: 'DIRTY', priority: 1 } });
+        await this.housekeepingService.createDirtyTask(tx, { roomId: br.roomId, priority: 1 });
       }
 
       await this.auditLog.record(tx, {

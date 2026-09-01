@@ -49,7 +49,7 @@ async function rawFetch(path: string, token: string | null, init?: RequestInit) 
 }
 
 /** Fetches a binary endpoint (e.g. a generated PDF) and saves it via the browser's download flow. */
-export async function downloadFile(path: string, filename: string): Promise<void> {
+export async function downloadFile(path: string, fallbackFilename: string): Promise<void> {
   let res = await rawFetch(path, getToken());
 
   if (res.status === 401) {
@@ -59,6 +59,12 @@ export async function downloadFile(path: string, filename: string): Promise<void
   if (!res.ok) {
     throw new ApiError(`Request to ${path} failed with status ${res.status}`, res.status);
   }
+
+  // Prefer the server's Content-Disposition filename (e.g. invoices name
+  // themselves by guest + stay dates) — fall back to the caller's guess
+  // only if the header is missing or an intermediary stripped it.
+  const disposition = res.headers.get('content-disposition');
+  const filename = disposition?.match(/filename="([^"]+)"/)?.[1] ?? fallbackFilename;
 
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

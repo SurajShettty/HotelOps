@@ -1,6 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogService, fieldDiff } from '../audit-logs/audit-log.service';
+
+type DbClient = PrismaService | Prisma.TransactionClient;
 
 @Injectable()
 export class HousekeepingService {
@@ -8,6 +11,51 @@ export class HousekeepingService {
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
   ) {}
+
+  /**
+   * Every DIRTY housekeeping task in the app is created through here (checkout,
+   * mid-stay room move, upgrade/downgrade) so the auto-assign roster applies
+   * uniformly — a task created by hand doesn't need this, since the caller
+   * already knows who they're assigning it to.
+   */
+  async createDirtyTask(client: DbClient, params: { roomId: string; priority?: number }) {
+    const room = await client.room.findUniqueOrThrow({ where: { id: params.roomId }, select: { hotelId: true, floor: true } });
+    const assignedToId = await this.resolveAutoAssignee(client, room.hotelId, room.floor);
+    return client.housekeepingTask.create({
+      data: { roomId: params.roomId, status: 'DIRTY', priority: params.priority ?? 0, assignedToId },
+    });
+  }
+
+  private async resolveAutoAssignee(client: DbClient, hotelId: string, floor: string | null): Promise<string | undefined> {
+    if (!floor) return undefined;
+    const hotel = await client.hotel.findUnique({ where: { id: hotelId }, select: { housekeepingAutoAssignEnabled: true } });
+    if (!hotel?.housekeepingAutoAssignEnabled) return undefined;
+    const assignment = await client.housekeepingFloorAssignment.findUnique({ where: { hotelId_floor: { hotelId, floor } } });
+    return assignment?.userId;
+  }
+
+  listFloorAssignments(hotelId: string) {
+    return this.prisma.housekeepingFloorAssignment.findMany({
+      where: { hotelId },
+      include: { user: { select: { id: true, fullName: true, email: true } } },
+      orderBy: { floor: 'asc' },
+    });
+  }
+
+  upsertFloorAssignment(hotelId: string, floor: string, userId: string) {
+    return this.prisma.housekeepingFloorAssignment.upsert({
+      where: { hotelId_floor: { hotelId, floor } },
+      create: { hotelId, floor, userId },
+      update: { userId },
+      include: { user: { select: { id: true, fullName: true, email: true } } },
+    });
+  }
+
+  async removeFloorAssignment(id: string, hotelId: string) {
+    const existing = await this.prisma.housekeepingFloorAssignment.findUnique({ where: { id } });
+    if (!existing || existing.hotelId !== hotelId) throw new NotFoundException('Floor assignment not found');
+    await this.prisma.housekeepingFloorAssignment.delete({ where: { id } });
+  }
 
   /**
    * The live housekeeping board: one row per room (its most recent task —
@@ -21,7 +69,7 @@ export class HousekeepingService {
   async findTasks(hotelId: string, status?: string) {
     const latestPerRoom = await this.prisma.housekeepingTask.findMany({
       where: { room: { hotelId } },
-      include: { room: true, assignedTo: true },
+      include: { room: true, assignedTo: { select: { id: true, fullName: true, email: true } } },
       orderBy: { createdAt: 'desc' },
       distinct: ['roomId'],
     });
@@ -32,7 +80,7 @@ export class HousekeepingService {
     return filtered.sort((a, b) => b.priority - a.priority || a.createdAt.getTime() - b.createdAt.getTime());
   }
 
-  async updateTask(id: string, data: { status?: 'DIRTY' | 'IN_PROGRESS' | 'INSPECTED' | 'READY'; assignedToId?: string }, actorId: string) {
+  async updateTask(id: string, data: { status?: 'DIRTY' | 'IN_PROGRESS' | 'INSPECTED' | 'READY'; assignedToId?: string | null }, actorId: string) {
     const before = await this.prisma.housekeepingTask.findUniqueOrThrow({ where: { id }, include: { room: { select: { hotelId: true } } } });
     const task = await this.prisma.housekeepingTask.update({
       where: { id },

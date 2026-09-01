@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CalendarRange, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
-import { apiFetch, ApiError } from '@/lib/api';
+import { ArrowLeftRight, CalendarRange, Download, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
+import { apiFetch, ApiError, downloadFile } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
@@ -30,7 +30,8 @@ interface Booking {
   checkInDate: string;
   checkOutDate: string;
   guest: { fullName: string } & GuestBadgeInfo;
-  bookingRooms: { occupants: number; rateApplied: string; room: { id: string; roomNumber: string } }[];
+  bookingRooms: { id: string; occupants: number; rateApplied: string; room: { id: string; roomNumber: string } }[];
+  invoice: { id: string } | null;
 }
 
 interface AvailableRoom {
@@ -327,6 +328,227 @@ function BookingForm({
   );
 }
 
+function ChangeRoomForm({
+  hotelId,
+  booking,
+  onDone,
+  onCancel,
+}: {
+  hotelId: string;
+  booking: Booking;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const today = new Date().toISOString().slice(0, 10);
+  const checkOutDate = booking.checkOutDate.slice(0, 10);
+
+  const [bookingRoomId, setBookingRoomId] = useState(booking.bookingRooms[0]?.id ?? '');
+  const currentBookingRoom = booking.bookingRooms.find((br) => br.id === bookingRoomId) ?? null;
+  const currentRate = currentBookingRoom ? Number(currentBookingRoom.rateApplied) : 0;
+
+  const [availableRooms, setAvailableRooms] = useState<AvailableRoom[]>([]);
+  const [selectedRoomId, setSelectedRoomId] = useState('');
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
+
+  const [rate, setRate] = useState('');
+  const [rateTouched, setRateTouched] = useState(false);
+  const [rateQuote, setRateQuote] = useState<RateQuote | null>(null);
+  const [rateQuoteLoading, setRateQuoteLoading] = useState(false);
+  const [reason, setReason] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const selectedRoom = availableRooms.find((r) => r.id === selectedRoomId) ?? null;
+  const rateValue = Number(rate);
+  const tier = !rate || !rateValue ? null : rateValue > currentRate ? 'upgrade' : rateValue < currentRate ? 'downgrade' : 'lateral';
+
+  useEffect(() => {
+    if (!hotelId || !currentBookingRoom) {
+      setAvailableRooms([]);
+      return;
+    }
+    setCheckingAvailability(true);
+    apiFetch<{ availableRooms: AvailableRoom[] }>(
+      `/rooms/availability?hotelId=${hotelId}&checkIn=${today}&checkOut=${checkOutDate}&excludeBookingId=${booking.id}`,
+    )
+      .then((res) => {
+        const rooms = res.availableRooms.filter((r) => r.id !== currentBookingRoom.room.id);
+        setAvailableRooms(rooms);
+        setSelectedRoomId((prev) => (prev && rooms.some((r) => r.id === prev) ? prev : ''));
+      })
+      .catch(() => setAvailableRooms([]))
+      .finally(() => setCheckingAvailability(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hotelId, bookingRoomId]);
+
+  // Suggest a rate from active pricing rules for the remaining nights, same
+  // pattern as BookingForm — only the nights from today to checkout matter
+  // here, since that's all this change actually re-prices.
+  useEffect(() => {
+    if (!hotelId || !selectedRoom) {
+      setRateQuote(null);
+      return;
+    }
+    setRateQuoteLoading(true);
+    const timer = setTimeout(() => {
+      apiFetch<RateQuote>(
+        `/pricing-rules/quote-range?hotelId=${hotelId}&roomTypeId=${selectedRoom.roomType.id}&checkIn=${today}&checkOut=${checkOutDate}`,
+      )
+        .then((res) => {
+          setRateQuote(res);
+          if (!rateTouched) setRate(String(res.averageRate));
+        })
+        .catch(() => setRateQuote(null))
+        .finally(() => setRateQuoteLoading(false));
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hotelId, selectedRoom?.roomType.id]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!bookingRoomId) {
+      setError('Select which room to change');
+      return;
+    }
+    if (!selectedRoomId) {
+      setError('Select the new room');
+      return;
+    }
+    if (!rate || rateValue <= 0) {
+      setError('Enter a nightly rate');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await apiFetch(`/bookings/${booking.id}/change-room`, {
+        method: 'POST',
+        body: JSON.stringify({
+          hotelId,
+          bookingRoomId,
+          newRoomId: selectedRoomId,
+          newRate: rateValue,
+          ...(reason.trim() ? { reason: reason.trim() } : {}),
+        }),
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to change room');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card className="mb-6 p-5">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <ErrorBanner>{error}</ErrorBanner>}
+        <p className="flex items-center gap-1.5 text-sm text-slate-500">
+          Changing room for <span className="font-medium text-slate-900">{booking.guest.fullName}</span>&apos;s stay
+          <GuestBadges guest={booking.guest} />
+        </p>
+        {booking.bookingRooms.length > 1 && (
+          <div>
+            <Label htmlFor="bookingRoom">Which room</Label>
+            <Select
+              id="bookingRoom"
+              value={bookingRoomId}
+              onChange={(e) => {
+                setBookingRoomId(e.target.value);
+                setSelectedRoomId('');
+                setRateTouched(false);
+              }}
+            >
+              {booking.bookingRooms.map((br) => (
+                <option key={br.id} value={br.id}>
+                  Room {br.room.roomNumber} — {br.rateApplied}/night
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div>
+            <Label htmlFor="newRoom">New room</Label>
+            <Select
+              id="newRoom"
+              required
+              value={selectedRoomId}
+              onChange={(e) => {
+                setSelectedRoomId(e.target.value);
+                const room = availableRooms.find((r) => r.id === e.target.value);
+                if (room && !rateTouched) setRate(String(Number(room.roomType.baseRate)));
+              }}
+            >
+              <option value="" disabled>
+                {checkingAvailability ? 'Checking availability…' : 'Select an available room'}
+              </option>
+              {availableRooms.map((r) => (
+                <option key={r.id} value={r.id}>
+                  Room {r.roomNumber} — {r.roomType.baseRate}/night
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div>
+            <Label htmlFor="newRate">New rate/night</Label>
+            <Input
+              id="newRate"
+              required
+              type="number"
+              min={0}
+              step="any"
+              value={rate}
+              onChange={(e) => {
+                setRateTouched(true);
+                setRate(e.target.value);
+              }}
+            />
+            {rateQuoteLoading ? (
+              <p className="mt-1 text-xs text-slate-400">Checking pricing rules…</p>
+            ) : rateQuote && (rateQuote.averageRate !== rateQuote.baseRate || rateQuote.blended) ? (
+              <p className="mt-1 text-xs text-slate-400">
+                Pricing rules suggest {rateQuote.averageRate}
+                {rateQuote.blended ? ' (varies by night — averaged)' : ''}
+              </p>
+            ) : null}
+          </div>
+        </div>
+        {tier && (
+          <p className="text-xs text-slate-500">
+            Current rate {currentRate}/night →{' '}
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                tier === 'upgrade'
+                  ? 'bg-gold-50 text-gold-700'
+                  : tier === 'downgrade'
+                    ? 'bg-slate-200 text-slate-600'
+                    : 'bg-sky-50 text-sky-700'
+              }`}
+            >
+              {tier === 'upgrade' ? 'Upgrade' : tier === 'downgrade' ? 'Downgrade' : 'Lateral move'}
+            </span>{' '}
+            — billed from today ({today}) onward; nights already stayed keep the old rate.
+          </p>
+        )}
+        <div>
+          <Label htmlFor="reason">Reason (optional)</Label>
+          <Input id="reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. guest request, maintenance" />
+        </div>
+        <div className="flex gap-2">
+          <Button type="submit" disabled={submitting || availableRooms.length === 0}>
+            {submitting ? 'Saving…' : 'Change Room'}
+          </Button>
+          <button type="button" onClick={onCancel} className="text-sm text-slate-400 hover:text-slate-700">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
 export default function BookingsPage() {
   const { hotelId, ready } = useCurrentHotel();
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -339,8 +561,10 @@ export default function BookingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
+  const [changingRoomBooking, setChangingRoomBooking] = useState<Booking | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [quickFilter, setQuickFilter] = useState<'ARRIVING_TODAY' | 'DEPARTING_TODAY' | null>(null);
+  const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
 
   const today = new Date().toISOString().slice(0, 10);
 
@@ -395,6 +619,18 @@ export default function BookingsPage() {
     }
   }
 
+  async function handleDownloadInvoice(invoiceId: string) {
+    setError(null);
+    setDownloadingInvoiceId(invoiceId);
+    try {
+      await downloadFile(`/invoices/${invoiceId}/pdf`, `invoice-${invoiceId.slice(0, 8)}.pdf`);
+    } catch {
+      setError('Failed to download invoice');
+    } finally {
+      setDownloadingInvoiceId(null);
+    }
+  }
+
   if (!ready) return null;
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
@@ -407,6 +643,7 @@ export default function BookingsPage() {
           <Button
             onClick={() => {
               setEditingBooking(null);
+              setChangingRoomBooking(null);
               setShowCreateForm((v) => !v);
             }}
           >
@@ -491,6 +728,18 @@ export default function BookingsPage() {
         />
       )}
 
+      {changingRoomBooking && (
+        <ChangeRoomForm
+          hotelId={hotelId}
+          booking={changingRoomBooking}
+          onDone={() => {
+            setChangingRoomBooking(null);
+            reload();
+          }}
+          onCancel={() => setChangingRoomBooking(null)}
+        />
+      )}
+
       {loading ? (
         <p className="text-sm text-slate-400">Loading…</p>
       ) : bookings.length === 0 ? (
@@ -524,6 +773,8 @@ export default function BookingsPage() {
             <tbody className="divide-y divide-slate-100">
               {bookings.map((b) => {
                 const editable = b.status === 'CONFIRMED';
+                const canChangeRoom = b.status === 'CHECKED_IN';
+                const invoiceId = b.invoice?.id;
                 return (
                   <tr key={b.id} className="hover:bg-slate-50">
                     <td className="px-5 py-3 font-medium text-slate-900">
@@ -538,26 +789,54 @@ export default function BookingsPage() {
                     <td className="px-5 py-3 text-slate-600">{b.checkOutDate.slice(0, 10)}</td>
                     <td className="px-5 py-3"><StatusBadge status={b.status} /></td>
                     <td className="px-5 py-3">
-                      {editable && (
+                      {(editable || canChangeRoom || invoiceId) && (
                         <div className="flex items-center gap-3">
-                          <button
-                            onClick={() => {
-                              setShowCreateForm(false);
-                              setEditingBooking(b);
-                            }}
-                            title="Edit booking"
-                            className="text-slate-400 hover:text-brand-700"
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </button>
-                          <button
-                            onClick={() => handleCancel(b.id)}
-                            disabled={cancellingId === b.id}
-                            title="Cancel booking"
-                            className="text-slate-400 hover:text-rose-600 disabled:opacity-50"
-                          >
-                            <XCircle className="h-4 w-4" />
-                          </button>
+                          {invoiceId && (
+                            <button
+                              onClick={() => handleDownloadInvoice(invoiceId)}
+                              disabled={downloadingInvoiceId === invoiceId}
+                              title="Download invoice"
+                              className="text-slate-400 hover:text-brand-700 disabled:opacity-50"
+                            >
+                              <Download className="h-4 w-4" />
+                            </button>
+                          )}
+                          {editable && (
+                            <>
+                              <button
+                                onClick={() => {
+                                  setShowCreateForm(false);
+                                  setChangingRoomBooking(null);
+                                  setEditingBooking(b);
+                                }}
+                                title="Edit booking"
+                                className="text-slate-400 hover:text-brand-700"
+                              >
+                                <Pencil className="h-4 w-4" />
+                              </button>
+                              <button
+                                onClick={() => handleCancel(b.id)}
+                                disabled={cancellingId === b.id}
+                                title="Cancel booking"
+                                className="text-slate-400 hover:text-rose-600 disabled:opacity-50"
+                              >
+                                <XCircle className="h-4 w-4" />
+                              </button>
+                            </>
+                          )}
+                          {canChangeRoom && (
+                            <button
+                              onClick={() => {
+                                setShowCreateForm(false);
+                                setEditingBooking(null);
+                                setChangingRoomBooking(b);
+                              }}
+                              title="Upgrade/downgrade room"
+                              className="text-slate-400 hover:text-brand-700"
+                            >
+                              <ArrowLeftRight className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>

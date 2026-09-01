@@ -201,7 +201,10 @@ export default function RoomsPage() {
   // against whatever rooms the status/type filters already returned — that way
   // picking a floor never shrinks the set of floors offered in the dropdown.
   const floors = useMemo(
-    () => Array.from(new Set(rooms.map((r) => r.floor).filter((f): f is string => !!f))).sort(),
+    () =>
+      Array.from(new Set(rooms.map((r) => r.floor).filter((f): f is string => !!f))).sort((a, b) =>
+        a.localeCompare(b, undefined, { numeric: true }),
+      ),
     [rooms],
   );
   const visibleRooms = floorFilter ? rooms.filter((r) => r.floor === floorFilter) : rooms;

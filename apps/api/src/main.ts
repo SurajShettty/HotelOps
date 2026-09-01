@@ -11,7 +11,11 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.useGlobalInterceptors(new ResponseInterceptor());
   app.useGlobalFilters(new HttpExceptionFilter());
-  app.enableCors({ origin: process.env.WEB_APP_URL ?? 'http://localhost:3000', credentials: true });
+  app.enableCors({
+    origin: process.env.WEB_APP_URL ?? 'http://localhost:3000',
+    credentials: true,
+    exposedHeaders: ['Content-Disposition'],
+  });
 
   const port = process.env.PORT ?? 4000;
   await app.listen(port);

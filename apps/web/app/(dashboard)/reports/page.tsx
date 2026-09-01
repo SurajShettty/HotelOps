@@ -9,7 +9,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { Pagination } from '@/components/ui/pagination';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 
-type ReportType = 'occupancy' | 'revenue' | 'bookings' | 'cancellations' | 'housekeeping';
+type ReportType = 'occupancy' | 'revenue' | 'bookings' | 'cancellations' | 'housekeeping' | 'housekeeping-staff';
 
 const PAGINATED_TYPES: ReportType[] = ['bookings', 'cancellations', 'housekeeping'];
 const PAGE_SIZE = 25;
@@ -20,7 +20,11 @@ const REPORT_TYPES: { key: ReportType; label: string }[] = [
   { key: 'bookings', label: 'Bookings' },
   { key: 'cancellations', label: 'Cancellations' },
   { key: 'housekeeping', label: 'Housekeeping' },
+  { key: 'housekeeping-staff', label: 'Housekeeping by Staff' },
 ];
+
+// housekeeping-staff hits GET /reports/housekeeping/by-staff, not /reports/housekeeping-staff
+const REPORT_PATHS: Partial<Record<ReportType, string>> = { 'housekeeping-staff': 'housekeeping/by-staff' };
 
 function defaultFrom() {
   const d = new Date();
@@ -52,7 +56,7 @@ export default function ReportsPage() {
       params.set('page', String(page));
       params.set('pageSize', String(PAGE_SIZE));
     }
-    apiFetch(`/reports/${type}?${params.toString()}`)
+    apiFetch(`/reports/${REPORT_PATHS[type] ?? type}?${params.toString()}`)
       .then(setData)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load report'))
       .finally(() => setLoading(false));
@@ -180,6 +184,37 @@ function ReportBody({
           </tbody>
         </table>
         <Pagination page={page} pageSize={pageSize} total={total} onPageChange={onPageChange} />
+      </Card>
+    );
+  }
+
+  if (type === 'housekeeping-staff') {
+    const rows = data as { staffId: string | null; staffName: string; totalTasks: number; completedTasks: number; avgCompletionMinutes: number | null }[];
+    if (rows.length === 0) return <EmptyState icon={<BarChart3 className="h-8 w-8" />} title="No results in this range" />;
+    return (
+      <Card className="overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="border-b border-slate-200 bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+            <tr>
+              <th className="px-5 py-3">Staff</th>
+              <th className="px-5 py-3">Total tasks</th>
+              <th className="px-5 py-3">Completed</th>
+              <th className="px-5 py-3">Avg. completion time</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {rows.map((r) => (
+              <tr key={r.staffId ?? 'unassigned'}>
+                <td className={`px-5 py-3 font-medium ${r.staffId ? 'text-slate-900' : 'text-slate-400'}`}>{r.staffName}</td>
+                <td className="px-5 py-3 text-slate-600">{r.totalTasks}</td>
+                <td className="px-5 py-3 text-slate-600">{r.completedTasks}</td>
+                <td className="px-5 py-3 text-slate-600">
+                  {r.avgCompletionMinutes === null ? '—' : `${Math.floor(r.avgCompletionMinutes / 60)}h ${r.avgCompletionMinutes % 60}m`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </Card>
     );
   }
