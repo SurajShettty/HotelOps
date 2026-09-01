@@ -45,11 +45,13 @@ export function DateRangePicker({
     to: parseISO(checkOut),
   });
   const containerRef = useRef<HTMLDivElement>(null);
-  // react-day-picker's range mode sets `from = to = clickedDate` on the very
-  // first click of a new selection (not `to: undefined`), so "from && to are
-  // both set" can't be used to detect a *completed* two-click selection.
-  // Track it explicitly instead: the click that starts a fresh range doesn't
-  // close the popover; the next click (completing it) does.
+  // react-day-picker's built-in range merge (addToRange) only replaces `from`
+  // when you click exactly on the existing `from`/`to` day — once a *complete*
+  // range is already selected (e.g. this component opened pre-filled), every
+  // other click just moves `to`, so `from` can look permanently stuck. Rather
+  // than trust its merged result, drive the two-click flow ourselves off the
+  // actual clicked day (the handler's 2nd arg): the click that starts a fresh
+  // range doesn't close the popover; the next click (completing it) does.
   const midSelectionRef = useRef(false);
 
   useEffect(() => {
@@ -67,20 +69,21 @@ export function DateRangePicker({
     return () => document.removeEventListener('mousedown', handleClick);
   }, [open]);
 
-  function handleSelect(next: DateRange | undefined) {
-    setRange(next);
-    onChange(next?.from ? formatISO(next.from) : '', next?.to ? formatISO(next.to) : '');
-
-    if (!next?.from) {
-      midSelectionRef.current = false;
-      return;
-    }
+  function handleSelect(_next: DateRange | undefined, clickedDay: Date) {
     if (!midSelectionRef.current) {
-      // First click of a fresh selection — keep the popover open for the second click.
+      // First click of a fresh selection — always anchor on the day actually
+      // clicked, regardless of any pre-existing complete range.
+      setRange({ from: clickedDay, to: clickedDay });
+      onChange(formatISO(clickedDay), formatISO(clickedDay));
       midSelectionRef.current = true;
       return;
     }
-    // Second click completes the range.
+    // Second click completes the range — order the two dates by click order.
+    const anchor = range?.from ?? clickedDay;
+    const from = clickedDay < anchor ? clickedDay : anchor;
+    const to = clickedDay < anchor ? anchor : clickedDay;
+    setRange({ from, to });
+    onChange(formatISO(from), formatISO(to));
     midSelectionRef.current = false;
     setOpen(false);
   }

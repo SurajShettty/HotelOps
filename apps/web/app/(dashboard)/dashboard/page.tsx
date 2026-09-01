@@ -15,13 +15,17 @@ import {
   LogIn,
   LogOut,
   PercentCircle,
+  UserX,
   Wallet,
   Wrench,
 } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
+import { formatTime12h } from '@/lib/format';
 import { Button, Card, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
+import { DashboardTrends } from '@/components/ui/dashboard-trends';
+import { OccupancyHeatmap } from '@/components/ui/occupancy-heatmap';
 
 interface Room {
   id: string;
@@ -40,11 +44,19 @@ interface Booking {
 
 interface DashboardSummary {
   revenue: { today: number; monthToDate: number };
+  today: { arrivals: number; departures: number };
   alerts: {
     roomsNotReadyForArrivals: { bookingId: string; guestName: string; roomNumber: string; roomStatus: string }[];
     overdueHousekeeping: { taskId: string; roomNumber: string; status: string; minutesOpen: number }[];
     roomsOutOfService: { roomId: string; roomNumber: string; reason: string }[];
+    noShows: { bookingId: string; guestName: string; roomNumbers: string[]; checkInDate: string }[];
+    overstays: { bookingId: string; guestName: string; roomNumbers: string[]; checkOutDate: string; checkOutTime: string; dueToday: boolean }[];
   };
+}
+
+function daysAgo(iso: string) {
+  const ms = new Date(new Date().toDateString()).getTime() - new Date(iso.slice(0, 10)).getTime();
+  return Math.max(1, Math.round(ms / 86400000));
 }
 
 function money(n: number) {
@@ -118,11 +130,8 @@ export default function DashboardPage() {
     });
   }
 
-  useEffect(() => {
-    if (!ready || !hotelId) {
-      setLoading(false);
-      return;
-    }
+  function reload() {
+    if (!hotelId) return;
     Promise.all([
       apiFetch<Room[]>(`/rooms?hotelId=${hotelId}`),
       apiFetch<{ items: Booking[] }>(`/bookings?hotelId=${hotelId}&status=CONFIRMED&pageSize=200`),
@@ -135,7 +144,26 @@ export default function DashboardPage() {
         setSummary(summaryData);
       })
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    if (!ready || !hotelId) {
+      setLoading(false);
+      return;
+    }
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, hotelId]);
+
+  async function handleMarkNoShow(bookingId: string) {
+    if (!confirm('Mark this booking as a no-show?')) return;
+    try {
+      await apiFetch(`/bookings/${bookingId}/no-show`, { method: 'POST' });
+      reload();
+    } catch {
+      // Non-fatal — the alert list below still reflects the server's true state on next reload.
+    }
+  }
 
   if (!ready || loading) {
     return <p className="text-sm text-slate-400">Loading…</p>;
@@ -156,13 +184,17 @@ export default function DashboardPage() {
     { key: 'revenueToday', label: 'Revenue today', value: summary ? money(summary.revenue.today) : '—', icon: Wallet, tint: 'bg-gold-50 text-gold-700', sensitive: true },
     { key: 'revenueMtd', label: 'Revenue MTD', value: summary ? money(summary.revenue.monthToDate) : '—', icon: Wallet, tint: 'bg-gold-50 text-gold-700', sensitive: true },
     { key: 'totalRooms', label: 'Total rooms', value: rooms.length, icon: BedDouble, tint: 'bg-violet-50 text-violet-700' },
-    { key: 'arrivals', label: 'Arrivals today', value: arrivals.length, icon: LogIn, tint: 'bg-emerald-50 text-emerald-700' },
-    { key: 'departures', label: 'Departures today', value: departures.length, icon: LogOut, tint: 'bg-sky-50 text-sky-700' },
+    { key: 'arrivals', label: 'Arrivals today', value: summary ? summary.today.arrivals : '—', icon: LogIn, tint: 'bg-emerald-50 text-emerald-700' },
+    { key: 'departures', label: 'Departures today', value: summary ? summary.today.departures : '—', icon: LogOut, tint: 'bg-sky-50 text-sky-700' },
   ];
 
   const alerts = summary?.alerts;
   const alertCount = alerts
-    ? alerts.roomsNotReadyForArrivals.length + alerts.overdueHousekeeping.length + alerts.roomsOutOfService.length
+    ? alerts.roomsNotReadyForArrivals.length +
+      alerts.overdueHousekeeping.length +
+      alerts.roomsOutOfService.length +
+      alerts.noShows.length +
+      alerts.overstays.length
     : 0;
 
   return (
@@ -256,72 +288,123 @@ export default function DashboardPage() {
                   </ul>
                 </div>
               )}
+              {alerts.noShows.length > 0 && (
+                <div>
+                  <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
+                    <UserX className="h-3.5 w-3.5" /> No-shows
+                  </h3>
+                  <ul className="space-y-1.5">
+                    {alerts.noShows.map((n) => (
+                      <li key={n.bookingId} className="flex items-center justify-between gap-2 text-sm text-slate-700">
+                        <span>
+                          {n.guestName} <span className="text-slate-400">— Room {n.roomNumbers.join(', ')} ({daysAgo(n.checkInDate)}d overdue)</span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleMarkNoShow(n.bookingId)}
+                          className="shrink-0 text-xs font-medium text-rose-600 hover:underline"
+                        >
+                          Mark no-show
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {alerts.overstays.length > 0 && (
+                <div>
+                  <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
+                    <Clock className="h-3.5 w-3.5" /> Overstays
+                  </h3>
+                  <ul className="space-y-1.5">
+                    {alerts.overstays.map((o) => (
+                      <li key={o.bookingId} className="flex items-center justify-between gap-2 text-sm text-slate-700">
+                        <span>
+                          {o.guestName}{' '}
+                          <span className="text-slate-400">
+                            — Room {o.roomNumbers.join(', ')} (
+                            {o.dueToday ? `due out today, past ${formatTime12h(o.checkOutTime)}` : `${daysAgo(o.checkOutDate)}d overdue`})
+                          </span>
+                        </span>
+                        <Link href="/checkout" className="shrink-0 text-xs font-medium text-brand-700 hover:underline">
+                          Check out
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
         </Card>
       )}
 
+      <DashboardTrends hotelId={hotelId} />
+
       <div className="mt-6 grid gap-4 md:grid-cols-2">
-        <Card className="p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">Arrivals today</h2>
-            {arrivals.length > 0 && (
-              <Link href="/checkin" className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">
-                Go to Check-In <ArrowRight className="h-3 w-3" />
-              </Link>
-            )}
-          </div>
-          {arrivals.length === 0 ? (
-            <p className="text-sm text-slate-400">No arrivals today.</p>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {arrivals.map((b) => (
-                <li key={b.id} className="flex items-center justify-between gap-2 py-2 text-sm">
-                  <span className="flex items-center gap-1.5 text-slate-700">
-                    {b.guest.fullName}
-                    <GuestBadges guest={b.guest} />
-                    <span className="text-slate-400">
-                      · Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+        <OccupancyHeatmap hotelId={hotelId} />
+        <div className="grid gap-4">
+          <Card className="p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-900">Waiting to check in</h2>
+              {arrivals.length > 0 && (
+                <Link href="/checkin" className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">
+                  Go to Check-In <ArrowRight className="h-3 w-3" />
+                </Link>
+              )}
+            </div>
+            {arrivals.length === 0 ? (
+              <p className="text-sm text-slate-400">Nobody waiting to check in.</p>
+            ) : (
+              <ul className="divide-y divide-slate-100">
+                {arrivals.map((b) => (
+                  <li key={b.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                    <span className="flex items-center gap-1.5 text-slate-700">
+                      {b.guest.fullName}
+                      <GuestBadges guest={b.guest} />
+                      <span className="text-slate-400">
+                        · Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+                      </span>
                     </span>
-                  </span>
-                  <Link href="/checkin" className="shrink-0 text-slate-400 hover:text-brand-700" title="Check in">
-                    <LogIn className="h-4 w-4" />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-        <Card className="p-5">
-          <div className="mb-3 flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-slate-900">Departures today</h2>
-            {departures.length > 0 && (
-              <Link href="/checkout" className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">
-                Go to Check-Out <ArrowRight className="h-3 w-3" />
-              </Link>
+                    <Link href="/checkin" className="shrink-0 text-slate-400 hover:text-brand-700" title="Check in">
+                      <LogIn className="h-4 w-4" />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
             )}
-          </div>
-          {departures.length === 0 ? (
-            <p className="text-sm text-slate-400">No departures today.</p>
-          ) : (
-            <ul className="divide-y divide-slate-100">
-              {departures.map((b) => (
-                <li key={b.id} className="flex items-center justify-between gap-2 py-2 text-sm">
-                  <span className="flex items-center gap-1.5 text-slate-700">
-                    {b.guest.fullName}
-                    <GuestBadges guest={b.guest} />
-                    <span className="text-slate-400">
-                      · Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+          </Card>
+          <Card className="p-5">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-slate-900">Waiting to check out</h2>
+              {departures.length > 0 && (
+                <Link href="/checkout" className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">
+                  Go to Check-Out <ArrowRight className="h-3 w-3" />
+                </Link>
+              )}
+            </div>
+            {departures.length === 0 ? (
+              <p className="text-sm text-slate-400">Nobody waiting to check out.</p>
+            ) : (
+              <ul className="divide-y divide-slate-100">
+                {departures.map((b) => (
+                  <li key={b.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                    <span className="flex items-center gap-1.5 text-slate-700">
+                      {b.guest.fullName}
+                      <GuestBadges guest={b.guest} />
+                      <span className="text-slate-400">
+                        · Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+                      </span>
                     </span>
-                  </span>
-                  <Link href="/checkout" className="shrink-0 text-slate-400 hover:text-brand-700" title="Check out">
-                    <LogOut className="h-4 w-4" />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+                    <Link href="/checkout" className="shrink-0 text-slate-400 hover:text-brand-700" title="Check out">
+                      <LogOut className="h-4 w-4" />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
       </div>
     </div>
   );

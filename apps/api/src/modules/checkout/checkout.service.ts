@@ -68,7 +68,11 @@ export class CheckoutService {
       _sum: { amount: true },
     });
     const alreadyPaid = Number(alreadyPaidAgg._sum.amount ?? 0);
+    // A deposit (or other prior charge) can exceed what's actually owed once
+    // the final folio is known — e.g. an early departure — in which case
+    // nothing is due and the excess is owed back to the guest instead.
     const balanceDue = Math.max(0, Math.round((grandTotal - alreadyPaid) * 100) / 100);
+    const refundDue = Math.max(0, Math.round((alreadyPaid - grandTotal) * 100) / 100);
 
     return {
       booking,
@@ -86,6 +90,7 @@ export class CheckoutService {
       grandTotal,
       alreadyPaid,
       balanceDue,
+      refundDue,
     };
   }
 
@@ -103,14 +108,20 @@ export class CheckoutService {
 
   async checkout(dto: CheckoutDto) {
     return this.prisma.$transaction(async (tx) => {
-      const { booking, actualCheckOut, subtotal, discountTotal, taxTotal, grandTotal, alreadyPaid } = await this.computeFolio(
-        tx,
-        dto.bookingId,
-        dto.additionalCharges,
-        dto.discounts,
-        dto.taxRatePercent,
-        dto.waiveLateCheckOutFee,
-      );
+      const {
+        booking,
+        actualCheckOut,
+        nights,
+        roomSubtotal,
+        chargesTotal,
+        lateCheckOutFee,
+        subtotal,
+        taxRate,
+        discountTotal,
+        taxTotal,
+        grandTotal,
+        alreadyPaid,
+      } = await this.computeFolio(tx, dto.bookingId, dto.additionalCharges, dto.discounts, dto.taxRatePercent, dto.waiveLateCheckOutFee);
 
       const paidSoFar = alreadyPaid + dto.paymentAmount;
       if (paidSoFar < grandTotal) {
@@ -125,7 +136,22 @@ export class CheckoutService {
       });
 
       const invoice = await tx.invoice.create({
-        data: { bookingId: booking.id, subtotal, taxTotal, discountTotal, grandTotal },
+        data: {
+          bookingId: booking.id,
+          nights,
+          roomSubtotal,
+          chargesTotal,
+          lateCheckOutFee,
+          // Ad-hoc line items typed in at this checkout — logged RoomCharges
+          // stay queryable by bookingId on their own and aren't duplicated here.
+          additionalCharges: (dto.additionalCharges ?? []) as unknown as Prisma.InputJsonValue,
+          discounts: (dto.discounts ?? []) as unknown as Prisma.InputJsonValue,
+          subtotal,
+          taxRatePercent: taxRate,
+          taxTotal,
+          discountTotal,
+          grandTotal,
+        },
       });
 
       await tx.booking.update({ where: { id: booking.id }, data: { status: 'CHECKED_OUT', checkOutDate: actualCheckOut } });

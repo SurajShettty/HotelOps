@@ -1,0 +1,13 @@
+-- AlterTable
+ALTER TABLE "invoices"
+  ADD COLUMN "nights" INTEGER NOT NULL DEFAULT 1,
+  ADD COLUMN "room_subtotal" DECIMAL(10,2) NOT NULL DEFAULT 0,
+  ADD COLUMN "charges_total" DECIMAL(10,2) NOT NULL DEFAULT 0,
+  ADD COLUMN "late_check_out_fee" DECIMAL(10,2) NOT NULL DEFAULT 0,
+  ADD COLUMN "additional_charges" JSONB NOT NULL DEFAULT '[]',
+  ADD COLUMN "discounts" JSONB NOT NULL DEFAULT '[]',
+  ADD COLUMN "tax_rate_percent" DECIMAL(5,2) NOT NULL DEFAULT 12;
+
+ALTER TABLE "invoices" ALTER COLUMN "nights" DROP DEFAULT;
+ALTER TABLE "invoices" ALTER COLUMN "room_subtotal" DROP DEFAULT;
+ALTER TABLE "invoices" ALTER COLUMN "tax_rate_percent" DROP DEFAULT;

@@ -52,4 +52,9 @@ export class BookingsController {
   cancel(@Param('id') id: string) {
     return this.bookingsService.cancel(id);
   }
+
+  @Post(':id/no-show')
+  noShow(@Param('id') id: string) {
+    return this.bookingsService.noShow(id);
+  }
 }

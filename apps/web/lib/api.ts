@@ -48,6 +48,29 @@ async function rawFetch(path: string, token: string | null, init?: RequestInit) 
   });
 }
 
+/** Fetches a binary endpoint (e.g. a generated PDF) and saves it via the browser's download flow. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  let res = await rawFetch(path, getToken());
+
+  if (res.status === 401) {
+    const newToken = await refreshAccessToken();
+    res = await rawFetch(path, newToken);
+  }
+  if (!res.ok) {
+    throw new ApiError(`Request to ${path} failed with status ${res.status}`, res.status);
+  }
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const isAuthEndpoint = path === '/auth/login' || path === '/auth/refresh';
   let res = await rawFetch(path, getToken(), init);

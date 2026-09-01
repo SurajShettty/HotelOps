@@ -298,4 +298,17 @@ export class BookingsService {
     }
     return this.prisma.booking.update({ where: { id }, data: { status: 'CANCELLED' } });
   }
+
+  // Only a CONFIRMED booking that never checked in can be marked a no-show —
+  // once checked in, "didn't show up" no longer applies. Frees the room from
+  // showing as reserved and stops it counting toward Dashboard's no-show
+  // alert (see DashboardService.getNoShows).
+  async noShow(id: string) {
+    const booking = await this.prisma.booking.findUnique({ where: { id } });
+    if (!booking) throw new NotFoundException('Booking not found');
+    if (booking.status !== 'CONFIRMED') {
+      throw new ConflictException({ code: 'INVALID_STATE', message: `Booking in status ${booking.status} cannot be marked as no-show` });
+    }
+    return this.prisma.booking.update({ where: { id }, data: { status: 'NO_SHOW' } });
+  }
 }

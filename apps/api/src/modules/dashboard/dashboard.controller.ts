@@ -9,4 +9,9 @@ export class DashboardController {
   getSummary(@Query('hotelId') hotelId: string) {
     return this.dashboardService.getSummary(hotelId);
   }
+
+  @Get('trends')
+  getTrends(@Query('hotelId') hotelId: string, @Query('days') days?: string) {
+    return this.dashboardService.getTrends(hotelId, days ? Number(days) : 7);
+  }
 }

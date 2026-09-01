@@ -334,12 +334,26 @@ model Payment {
 model Invoice {
   id            String   @id @default(uuid())
   bookingId     String   @unique @map("booking_id")
-  subtotal      Decimal  @db.Decimal(10, 2)
-  taxTotal      Decimal  @map("tax_total") @db.Decimal(10, 2)
-  discountTotal Decimal  @default(0) @map("discount_total") @db.Decimal(10, 2)
-  grandTotal    Decimal  @map("grand_total") @db.Decimal(10, 2)
-  pdfUrl        String?  @map("pdf_url")
-  issuedAt      DateTime @default(now()) @map("issued_at")
+  // Breakdown of `subtotal` — stored alongside it (rather than re-derived from
+  // Booking/RoomCharge at read time) because two of its inputs are decided in
+  // the moment and can't be reconstructed later: whether the late check-out
+  // fee applied depended on the wall-clock time checkout was processed, and
+  // `additionalCharges`/`discounts` below are ad-hoc line items typed in at
+  // checkout that exist nowhere else (unlike logged RoomCharges, which are
+  // still queryable by bookingId after the fact).
+  nights            Int
+  roomSubtotal      Decimal  @map("room_subtotal") @db.Decimal(10, 2)
+  chargesTotal      Decimal  @default(0) @map("charges_total") @db.Decimal(10, 2)
+  lateCheckOutFee   Decimal  @default(0) @map("late_check_out_fee") @db.Decimal(10, 2)
+  additionalCharges Json     @default("[]") @map("additional_charges")
+  discounts         Json     @default("[]")
+  subtotal          Decimal  @db.Decimal(10, 2)
+  taxRatePercent    Decimal  @map("tax_rate_percent") @db.Decimal(5, 2)
+  taxTotal          Decimal  @map("tax_total") @db.Decimal(10, 2)
+  discountTotal     Decimal  @default(0) @map("discount_total") @db.Decimal(10, 2)
+  grandTotal        Decimal  @map("grand_total") @db.Decimal(10, 2)
+  pdfUrl            String?  @map("pdf_url")
+  issuedAt          DateTime @default(now()) @map("issued_at")
 
   booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
 

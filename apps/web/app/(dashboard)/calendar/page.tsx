@@ -2,24 +2,33 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { Ban, CalendarPlus, ChevronLeft, ChevronRight, LogIn } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
+import { GuestPicker, PickedGuest } from '@/components/ui/guest-picker';
 
 const DAYS_SHOWN = 14;
 
 interface RoomType {
   id: string;
   name: string;
+  baseRate: string;
+  maxOccupancy: number;
 }
 
 interface Room {
   id: string;
   roomNumber: string;
   roomType: RoomType;
+}
+
+interface RateQuote {
+  baseRate: number;
+  averageRate: number;
+  blended: boolean;
 }
 
 interface Booking {
@@ -46,8 +55,21 @@ interface Anchor {
   left: number;
 }
 
+interface CellInfo {
+  kind: 'booking' | 'block';
+  id: string;
+  label: string;
+  status: string;
+}
+
+// Local calendar date, not UTC — `d` here is always a local midnight (see
+// addDays/startDate below), and toISOString() would convert that to UTC,
+// silently rolling it back a day for any viewer ahead of UTC (including the
+// app's Asia/Kolkata default) and misaligning every column from its header.
 function toDateOnly(d: Date) {
-  return d.toISOString().slice(0, 10);
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${month}-${day}`;
 }
 
 function addDays(d: Date, n: number) {
@@ -151,6 +173,285 @@ function BlockForm({
   );
 }
 
+/**
+ * Reserve a room for a not-yet-arrived guest, or (when the clicked date is
+ * today) skip straight to a walk-in check-in: create the booking, then
+ * immediately call /checkin with the room it just got assigned. Either way
+ * this is a brand-new booking — there's no existing bookingId to attach to,
+ * since the cell was empty.
+ */
+function ReserveOrCheckinForm({
+  hotelId,
+  room,
+  date,
+  mode,
+  anchor,
+  onCancel,
+  onDone,
+}: {
+  hotelId: string;
+  room: Room;
+  date: string;
+  mode: 'reserve' | 'checkin';
+  anchor: Anchor;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [pickedGuest, setPickedGuest] = useState<PickedGuest | null>(null);
+  const [checkOutDate, setCheckOutDate] = useState(toDateOnly(addDays(new Date(date), 1)));
+  const [occupants, setOccupants] = useState('1');
+  const [rate, setRate] = useState(String(Number(room.roomType.baseRate)));
+  const [rateTouched, setRateTouched] = useState(false);
+  const [rateQuote, setRateQuote] = useState<RateQuote | null>(null);
+  const [rateQuoteLoading, setRateQuoteLoading] = useState(false);
+  const [deposit, setDeposit] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const overCapacity = Number(occupants) > room.roomType.maxOccupancy;
+
+  // Suggest a rate from active pricing rules once a check-out date is set —
+  // same "instant base-rate fallback, then refine" pattern as the Bookings
+  // page form. A stay only stores one flat rate, so this is the average
+  // across the nights; `blended` (surfaced below the field) flags when the
+  // nights actually priced differently.
+  useEffect(() => {
+    if (!hotelId || !checkOutDate) {
+      setRateQuote(null);
+      return;
+    }
+    setRateQuoteLoading(true);
+    const timer = setTimeout(() => {
+      apiFetch<RateQuote>(
+        `/pricing-rules/quote-range?hotelId=${hotelId}&roomTypeId=${room.roomType.id}&checkIn=${date}&checkOut=${checkOutDate}`,
+      )
+        .then((res) => {
+          setRateQuote(res);
+          if (!rateTouched) setRate(String(res.averageRate));
+        })
+        .catch(() => setRateQuote(null))
+        .finally(() => setRateQuoteLoading(false));
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hotelId, date, checkOutDate, room.roomType.id]);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!pickedGuest?.fullName.trim()) {
+      setError('Enter a guest name');
+      return;
+    }
+    if (!pickedGuest.id && (!pickedGuest.email.trim() || !pickedGuest.phone.trim())) {
+      setError('Enter the guest’s email and phone');
+      return;
+    }
+    if (overCapacity) {
+      setError(`This room sleeps a maximum of ${room.roomType.maxOccupancy}`);
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const guestId =
+        pickedGuest.id ??
+        (
+          await apiFetch<{ id: string }>('/guests', {
+            method: 'POST',
+            body: JSON.stringify({
+              hotelId,
+              fullName: pickedGuest.fullName.trim(),
+              email: pickedGuest.email.trim(),
+              phone: pickedGuest.phone.trim(),
+            }),
+          })
+        ).id;
+
+      const booking = await apiFetch<{ id: string; bookingRooms: { id: string; roomId: string }[] }>('/bookings', {
+        method: 'POST',
+        body: JSON.stringify({
+          hotelId,
+          guestId,
+          checkInDate: date,
+          checkOutDate,
+          rooms: [{ roomId: room.id, rate: Number(rate), occupants: Number(occupants) }],
+          source: mode === 'checkin' ? 'WALK_IN' : 'DIRECT',
+        }),
+      });
+
+      if (mode === 'checkin') {
+        await apiFetch('/checkin', {
+          method: 'POST',
+          body: JSON.stringify({
+            bookingId: booking.id,
+            roomAssignments: booking.bookingRooms.map((br) => ({ bookingRoomId: br.id, roomId: br.roomId })),
+            ...(deposit ? { depositAmount: Number(deposit) } : {}),
+          }),
+        });
+      }
+
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : `Failed to ${mode === 'checkin' ? 'check in' : 'reserve'}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40" onClick={onCancel} />
+      <form
+        onSubmit={handleSubmit}
+        style={{ top: anchor.top, left: anchor.left }}
+        className="fixed z-50 w-80 space-y-3 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
+      >
+        {error && <ErrorBanner>{error}</ErrorBanner>}
+        <p className="text-xs font-medium text-slate-500">
+          Room {room.roomNumber} · {mode === 'checkin' ? `Check in ${date}` : `Reserve from ${date}`}
+        </p>
+
+        <GuestPicker hotelId={hotelId} value={pickedGuest} onChange={setPickedGuest} />
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <Label htmlFor="cell-checkout">Check-out</Label>
+            <Input id="cell-checkout" type="date" required min={toDateOnly(addDays(new Date(date), 1))} value={checkOutDate} onChange={(e) => setCheckOutDate(e.target.value)} className="text-sm" />
+          </div>
+          <div>
+            <Label htmlFor="cell-occupants">Occupants</Label>
+            <Input id="cell-occupants" type="number" min={1} required value={occupants} onChange={(e) => setOccupants(e.target.value)} className="text-sm" />
+          </div>
+          {mode === 'checkin' && (
+            <div>
+              <Label htmlFor="cell-deposit">Deposit</Label>
+              <Input id="cell-deposit" type="number" min={0} placeholder="0" value={deposit} onChange={(e) => setDeposit(e.target.value)} className="text-sm" />
+            </div>
+          )}
+        </div>
+        {overCapacity && <p className="text-xs text-rose-600">Sleeps a maximum of {room.roomType.maxOccupancy}.</p>}
+
+        <div>
+          <Label htmlFor="cell-rate">Rate/night</Label>
+          <Input
+            id="cell-rate"
+            type="number"
+            min={0}
+            step="any"
+            required
+            value={rate}
+            onChange={(e) => {
+              setRateTouched(true);
+              setRate(e.target.value);
+            }}
+            className="text-sm"
+          />
+          {rateQuoteLoading ? (
+            <p className="mt-1 text-xs text-slate-400">Checking pricing rules…</p>
+          ) : rateQuote && (rateQuote.averageRate !== rateQuote.baseRate || rateQuote.blended) ? (
+            <p className="mt-1 text-xs text-slate-400">
+              Pricing rules suggest {rateQuote.averageRate}
+              {rateQuote.blended ? ' (varies by night — averaged)' : ''}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Button type="submit" disabled={submitting} className="px-3 py-1.5 text-xs">
+            {submitting ? (mode === 'checkin' ? 'Checking in…' : 'Reserving…') : mode === 'checkin' ? 'Check In' : 'Reserve'}
+          </Button>
+          <button type="button" onClick={onCancel} className="text-xs text-slate-400 hover:text-slate-700">Back</button>
+        </div>
+      </form>
+    </>,
+    document.body,
+  );
+}
+
+/**
+ * What clicking an empty cell offers: reserve it for a future arrival, jump
+ * straight to a walk-in check-in (only offered for today — check-in always
+ * stamps the *actual*, current date, so offering it on a future cell would
+ * silently check the guest in today regardless of which cell was clicked),
+ * or block it for maintenance/etc (the original behavior, unchanged).
+ */
+function EmptyCellPopover({
+  hotelId,
+  room,
+  date,
+  isToday,
+  anchor,
+  onCancel,
+  onDone,
+}: {
+  hotelId: string;
+  room: Room;
+  date: string;
+  isToday: boolean;
+  anchor: Anchor;
+  onCancel: () => void;
+  onDone: () => void;
+}) {
+  const [view, setView] = useState<'menu' | 'reserve' | 'checkin' | 'block'>('menu');
+
+  if (view === 'block') {
+    return <BlockForm hotelId={hotelId} roomId={room.id} date={date} anchor={anchor} onCancel={() => setView('menu')} onDone={onDone} />;
+  }
+  if (view === 'reserve' || view === 'checkin') {
+    return (
+      <ReserveOrCheckinForm
+        hotelId={hotelId}
+        room={room}
+        date={date}
+        mode={view}
+        anchor={anchor}
+        onCancel={() => setView('menu')}
+        onDone={onDone}
+      />
+    );
+  }
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40" onClick={onCancel} />
+      <div
+        style={{ top: anchor.top, left: anchor.left }}
+        className="fixed z-50 w-52 space-y-0.5 rounded-lg border border-slate-200 bg-white p-1.5 text-left shadow-popover"
+      >
+        <button
+          type="button"
+          onClick={() => setView('reserve')}
+          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+        >
+          <CalendarPlus className="h-4 w-4 text-brand-600" /> Reserve
+        </button>
+        {isToday && (
+          <button
+            type="button"
+            onClick={() => setView('checkin')}
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+          >
+            <LogIn className="h-4 w-4 text-emerald-600" /> Check in now
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setView('block')}
+          className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+        >
+          <Ban className="h-4 w-4 text-amber-600" /> Block room
+        </button>
+        <div className="border-t border-slate-100 pt-0.5">
+          <button type="button" onClick={onCancel} className="w-full rounded-md px-2.5 py-1.5 text-center text-xs text-slate-400 hover:bg-slate-50">
+            Cancel
+          </button>
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 function CellActionPopover({
   hotelId,
   info,
@@ -159,7 +460,7 @@ function CellActionPopover({
   onCancel,
 }: {
   hotelId: string;
-  info: { kind: 'booking' | 'block'; id: string; label: string; status: string };
+  info: CellInfo;
   anchor: Anchor;
   onDone: () => void;
   onCancel: () => void;
@@ -245,7 +546,7 @@ export default function CalendarPage() {
   const [activeCell, setActiveCell] = useState<{ roomId: string; date: string; anchor: Anchor } | null>(null);
   const [activeAction, setActiveAction] = useState<{
     cellKey: string;
-    info: { kind: 'booking' | 'block'; id: string; label: string; status: string };
+    info: CellInfo;
     anchor: Anchor;
   } | null>(null);
   const [hoveredCell, setHoveredCell] = useState<{
@@ -258,6 +559,7 @@ export default function CalendarPage() {
 
   const days = useMemo(() => Array.from({ length: DAYS_SHOWN }, (_, i) => addDays(startDate, i)), [startDate]);
   const { colors: roomTypeColors, types: roomTypes } = useRoomTypeColors(rooms);
+  const todayIso = toDateOnly(new Date());
 
   // Small delay before showing the preview so it doesn't flash while the mouse
   // is just passing through a row of cells on its way somewhere else.
@@ -299,21 +601,202 @@ export default function CalendarPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, hotelId]);
 
-  function cellInfo(roomId: string, date: Date) {
-    const iso = toDateOnly(date);
-    const booking = bookings.find(
-      (b) =>
-        ['CONFIRMED', 'CHECKED_IN'].includes(b.status) &&
-        b.bookingRooms.some((br) => br.room.id === roomId) &&
-        iso >= b.checkInDate.slice(0, 10) &&
-        iso < b.checkOutDate.slice(0, 10),
-    );
-    if (booking) return { kind: 'booking' as const, id: booking.id, label: booking.guest.fullName, status: booking.status };
+  function activeBookingsFor(roomId: string) {
+    return bookings.filter((b) => ['CONFIRMED', 'CHECKED_IN'].includes(b.status) && b.bookingRooms.some((br) => br.room.id === roomId));
+  }
 
-    const block = blocks.find((bl) => bl.roomId === roomId && iso >= bl.startDate.slice(0, 10) && iso < bl.endDate.slice(0, 10));
-    if (block) return { kind: 'block' as const, id: block.id, label: block.reason, status: block.reason };
+  function blockAt(roomId: string, iso: string) {
+    return blocks.find((bl) => bl.roomId === roomId && iso >= bl.startDate.slice(0, 10) && iso < bl.endDate.slice(0, 10));
+  }
 
+  // Nights strictly between the check-in and check-out day — those two
+  // boundary days are rendered as half-cells instead (see arrivalAt/departureAt),
+  // so together an arrival's right half + the next room's departure's left
+  // half reads as one full day, the same way a hotel whiteboard would show it.
+  function midStayAt(roomId: string, iso: string) {
+    return activeBookingsFor(roomId).find((b) => iso > b.checkInDate.slice(0, 10) && iso < b.checkOutDate.slice(0, 10));
+  }
+
+  function arrivalAt(roomId: string, iso: string) {
+    return activeBookingsFor(roomId).find((b) => b.checkInDate.slice(0, 10) === iso);
+  }
+
+  function departureAt(roomId: string, iso: string) {
+    return activeBookingsFor(roomId).find((b) => b.checkOutDate.slice(0, 10) === iso);
+  }
+
+  function bookingCellInfo(b: Booking, label: string): CellInfo {
+    return { kind: 'booking', id: b.id, label, status: b.status };
+  }
+
+  // Whichever entity occupies the left/right half of this day for this room
+  // — a block or booking fills both halves identically (it's a full-width
+  // day), an arrival only fills the right half, a departure only the left.
+  // Comparing today's edge against the neighboring day's opposite edge is
+  // how adjacent cells decide whether to touch seamlessly (same entity) or
+  // keep a gap (different entities, or nothing).
+  type Occupant = { kind: 'booking' | 'block'; id: string } | null;
+
+  function leftOccupant(roomId: string, iso: string): Occupant {
+    const block = blockAt(roomId, iso);
+    if (block) return { kind: 'block', id: block.id };
+    const mid = midStayAt(roomId, iso);
+    if (mid) return { kind: 'booking', id: mid.id };
+    const dep = departureAt(roomId, iso);
+    if (dep) return { kind: 'booking', id: dep.id };
     return null;
+  }
+
+  function rightOccupant(roomId: string, iso: string): Occupant {
+    const block = blockAt(roomId, iso);
+    if (block) return { kind: 'block', id: block.id };
+    const mid = midStayAt(roomId, iso);
+    if (mid) return { kind: 'booking', id: mid.id };
+    const arr = arrivalAt(roomId, iso);
+    if (arr) return { kind: 'booking', id: arr.id };
+    return null;
+  }
+
+  function sameOccupant(a: Occupant, b: Occupant) {
+    return !!a && !!b && a.kind === b.kind && a.id === b.id;
+  }
+
+  // Which visible day should carry this booking's guest name — the widest
+  // cell available beats a half-cell, since a name barely fits in a half-day
+  // column: prefer the first visible full mid-stay night, then the arrival
+  // half, then (for a stay whose only visible day is its departure) that half.
+  function labelDateForBooking(b: Booking): string {
+    const isoDays = days.map(toDateOnly);
+    const checkIn = b.checkInDate.slice(0, 10);
+    const checkOut = b.checkOutDate.slice(0, 10);
+    return (
+      isoDays.find((iso) => iso > checkIn && iso < checkOut) ??
+      isoDays.find((iso) => iso === checkIn) ??
+      isoDays.find((iso) => iso === checkOut) ??
+      ''
+    );
+  }
+
+  // Renders one colored block — either the full cell (a block, or a mid-stay
+  // night) or one half of it (an arrival or a departure sharing the day with
+  // whatever's on the other half). Reuses the same activeAction/hoveredCell
+  // state as before, keyed with `suffix` so the two halves of a cell (and the
+  // full-cell case) never collide. `rounded` caps only the true ends of a
+  // multi-day stay/block — every other edge stays square *and* butts flush
+  // against its neighbor (the caller drops the <td>'s padding on that side),
+  // so consecutive days read as one continuous bar, not separate chips.
+  function renderBookingCell(
+    info: CellInfo,
+    roomId: string,
+    iso: string,
+    suffix: string,
+    widthClass: string,
+    rounded: { left: boolean; right: boolean },
+  ) {
+    const cellKey = `${roomId}:${iso}:${suffix}`;
+    const isActionable = info.kind === 'block' || info.status === 'CONFIRMED';
+    const isActionOpen = activeAction?.cellKey === cellKey;
+    const isHovered = hoveredCell?.cellKey === cellKey && !isActionOpen;
+    // Border only on the true outer edges of the bar (paired with the caller
+    // dropping <td> padding on those same non-true edges) — so two cells
+    // belonging to the same booking/block touch with no border and no gap,
+    // while a genuinely different neighbor (or empty space) still gets one.
+    const roundedClass = `${rounded.left ? 'rounded-l-md' : ''} ${rounded.right ? 'rounded-r-md' : ''}`.trim();
+    const borderClass = `border-y ${rounded.left ? 'border-l' : ''} ${rounded.right ? 'border-r' : ''}`.trim();
+    const cellStyle = `flex h-full items-center truncate ${roundedClass} ${borderClass} px-1.5 text-xs font-medium ${
+      info.kind === 'block'
+        ? 'bg-amber-100 text-amber-800 border-amber-300'
+        : info.status === 'CHECKED_IN'
+          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+          : 'bg-sky-100 text-sky-800 border-sky-300'
+    }`;
+
+    return (
+      <div
+        key={suffix}
+        className={`relative h-8 ${widthClass}`}
+        onMouseEnter={(e) => handleCellMouseEnter(e, cellKey, info.kind, info.id)}
+        onMouseLeave={handleCellMouseLeave}
+      >
+        {isActionable ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              handleCellMouseLeave();
+              if (isActionOpen) {
+                setActiveAction(null);
+                return;
+              }
+              const rect = e.currentTarget.getBoundingClientRect();
+              const POPOVER_WIDTH = 256;
+              const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
+              setActiveAction({ cellKey, info, anchor: { top: rect.bottom + 4, left } });
+            }}
+            className={`w-full cursor-pointer ${cellStyle}`}
+          >
+            {info.label}
+          </button>
+        ) : (
+          <div className={cellStyle}>{info.label}</div>
+        )}
+        {isActionOpen && (
+          <CellActionPopover
+            hotelId={hotelId!}
+            info={activeAction.info}
+            anchor={activeAction.anchor}
+            onCancel={() => setActiveAction(null)}
+            onDone={() => {
+              setActiveAction(null);
+              reload();
+            }}
+          />
+        )}
+        {isHovered &&
+          hoveredCell.kind === 'booking' &&
+          (() => {
+            const booking = bookings.find((b) => b.id === hoveredCell.id);
+            if (!booking) return null;
+            return (
+              <HoverPreview anchor={hoveredCell.anchor}>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+                    {booking.guest.fullName}
+                    <GuestBadges guest={booking.guest} />
+                  </p>
+                  <StatusBadge status={booking.status} />
+                </div>
+                <p className="text-xs text-slate-500">
+                  {formatDate(booking.checkInDate)} → {formatDate(booking.checkOutDate)} · {nightsBetween(booking.checkInDate, booking.checkOutDate)} night(s)
+                </p>
+                <p className="text-xs text-slate-500">
+                  Room{booking.bookingRooms.length > 1 ? 's' : ''}:{' '}
+                  {booking.bookingRooms.map((br) => `${br.room.roomNumber} (${br.occupants})`).join(', ')}
+                </p>
+                {(booking.guest.email || booking.guest.phone) && (
+                  <p className="text-xs text-slate-500">{[booking.guest.email, booking.guest.phone].filter(Boolean).join(' · ')}</p>
+                )}
+                <p className="text-xs text-slate-400">Source: {booking.source}</p>
+              </HoverPreview>
+            );
+          })()}
+        {isHovered &&
+          hoveredCell.kind === 'block' &&
+          (() => {
+            const blk = blocks.find((bl) => bl.id === hoveredCell.id);
+            if (!blk) return null;
+            return (
+              <HoverPreview anchor={hoveredCell.anchor}>
+                <p className="text-sm font-semibold text-slate-900">Room blocked</p>
+                <p className="text-xs text-slate-500">Reason: {blk.reason}</p>
+                <p className="text-xs text-slate-500">
+                  {formatDate(blk.startDate)} → {formatDate(blk.endDate)}
+                </p>
+                {blk.notes && <p className="text-xs text-slate-500">{blk.notes}</p>}
+              </HoverPreview>
+            );
+          })()}
+      </div>
+    );
   }
 
   if (!ready) return null;
@@ -365,9 +848,9 @@ export default function CalendarPage() {
           <table className="w-full border-collapse text-sm">
             <thead>
               <tr>
-                <th className="sticky left-0 z-10 min-w-[6rem] border-b border-r border-slate-200 bg-slate-50 px-3 py-2 text-left text-xs font-medium text-slate-500">Room</th>
+                <th className="sticky left-0 z-10 min-w-[7rem] border-b border-r border-slate-200 bg-slate-50 px-4 py-3 text-left text-xs font-medium text-slate-500">Room</th>
                 {days.map((d) => (
-                  <th key={d.toISOString()} className="min-w-[4.5rem] border-b border-slate-200 bg-slate-50 px-2 py-2 text-center text-xs font-medium text-slate-500">
+                  <th key={d.toISOString()} className="min-w-[6rem] border-b border-slate-200 bg-slate-50 px-2 py-3 text-center text-xs font-medium text-slate-500">
                     {d.toLocaleDateString(undefined, { day: '2-digit', month: 'short' })}
                   </th>
                 ))}
@@ -376,7 +859,7 @@ export default function CalendarPage() {
             <tbody>
               {rooms.map((room) => (
                 <tr key={room.id}>
-                  <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-white px-3 py-2 font-medium text-slate-900">
+                  <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-white px-4 py-2.5 font-medium text-slate-900">
                     <span className="flex items-center gap-2">
                       <span
                         title={room.roomType.name}
@@ -385,54 +868,64 @@ export default function CalendarPage() {
                       {room.roomNumber}
                     </span>
                   </td>
-                  {days.map((d) => {
+                  {days.map((d, i) => {
                     const iso = toDateOnly(d);
-                    const info = cellInfo(room.id, d);
-                    const cellKey = `${room.id}:${iso}`;
+                    const prevIso = i > 0 ? toDateOnly(days[i - 1]) : null;
+                    const nextIso = i < days.length - 1 ? toDateOnly(days[i + 1]) : null;
                     const isActive = activeCell?.roomId === room.id && activeCell?.date === iso;
-                    const isActionable = !!info && (info.kind === 'block' || info.status === 'CONFIRMED');
-                    const isActionOpen = activeAction?.cellKey === cellKey;
-                    const cellStyle = info
-                      ? `truncate rounded px-1 py-1.5 text-[10px] font-medium ring-1 ring-inset ${
-                          info.kind === 'block'
-                            ? 'bg-amber-50 text-amber-700 ring-amber-200'
-                            : info.status === 'CHECKED_IN'
-                              ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-                              : 'bg-sky-50 text-sky-700 ring-sky-200'
-                        }`
-                      : '';
-                    const isHovered = hoveredCell?.cellKey === cellKey && !isActionOpen;
+
+                    const block = blockAt(room.id, iso);
+                    const midStay = block ? undefined : midStayAt(room.id, iso);
+                    const arrival = block || midStay ? undefined : arrivalAt(room.id, iso);
+                    const departure = block || midStay ? undefined : departureAt(room.id, iso);
+
+                    // Does this cell's left/right edge butt against the *same*
+                    // booking/block on the neighboring day? If so, that edge
+                    // gets no padding, no border, and no rounding — the two
+                    // cells fuse into one bar. Otherwise it keeps its inset,
+                    // whether the neighbor is empty or a genuinely different
+                    // booking/block.
+                    const left = leftOccupant(room.id, iso);
+                    const right = rightOccupant(room.id, iso);
+                    const padLeft = !prevIso || !sameOccupant(rightOccupant(room.id, prevIso), left);
+                    const padRight = !nextIso || !sameOccupant(leftOccupant(room.id, nextIso), right);
+
+                    const fullInfo: CellInfo | null = block
+                      ? { kind: 'block', id: block.id, label: padLeft ? block.reason : '', status: block.reason }
+                      : midStay
+                        ? bookingCellInfo(midStay, labelDateForBooking(midStay) === iso ? midStay.guest.fullName : '')
+                        : null;
+
                     return (
                       <td
                         key={iso}
-                        className="relative border-b border-slate-100 p-1 text-center"
-                        onMouseEnter={info ? (e) => handleCellMouseEnter(e, cellKey, info.kind, info.id) : undefined}
-                        onMouseLeave={info ? handleCellMouseLeave : undefined}
+                        className={`relative border-b border-slate-100 py-1.5 text-center ${padLeft ? 'pl-1.5' : 'pl-0'} ${padRight ? 'pr-1.5' : 'pr-0'}`}
                       >
-                        {info ? (
-                          isActionable ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                handleCellMouseLeave();
-                                if (isActionOpen) {
-                                  setActiveAction(null);
-                                  return;
-                                }
-                                const rect = e.currentTarget.getBoundingClientRect();
-                                const POPOVER_WIDTH = 256;
-                                const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
-                                setActiveAction({ cellKey, info, anchor: { top: rect.bottom + 4, left } });
-                              }}
-                              className={`w-full cursor-pointer ${cellStyle}`}
-                            >
-                              {info.label}
-                            </button>
-                          ) : (
-                            <div className={cellStyle}>
-                              {info.label}
-                            </div>
-                          )
+                        {fullInfo ? (
+                          renderBookingCell(fullInfo, room.id, iso, 'full', 'w-full', { left: padLeft, right: padRight })
+                        ) : arrival || departure ? (
+                          <div className="flex">
+                            {departure
+                              ? renderBookingCell(
+                                  bookingCellInfo(departure, labelDateForBooking(departure) === iso ? departure.guest.fullName : ''),
+                                  room.id,
+                                  iso,
+                                  'departure',
+                                  'w-1/2',
+                                  { left: padLeft, right: true },
+                                )
+                              : <div className="w-1/2" />}
+                            {arrival
+                              ? renderBookingCell(
+                                  bookingCellInfo(arrival, labelDateForBooking(arrival) === iso ? arrival.guest.fullName : ''),
+                                  room.id,
+                                  iso,
+                                  'arrival',
+                                  'w-1/2',
+                                  { left: true, right: padRight },
+                                )
+                              : <div className="w-1/2" />}
+                          </div>
                         ) : (
                           <button
                             onClick={(e) => {
@@ -441,18 +934,22 @@ export default function CalendarPage() {
                                 return;
                               }
                               const rect = e.currentTarget.getBoundingClientRect();
-                              const POPOVER_WIDTH = 256;
+                              // Sized for the widest popover state (the reserve/check-in
+                              // form), not just the initial menu, so switching views can't
+                              // push it past the right edge of the viewport.
+                              const POPOVER_WIDTH = 320;
                               const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
                               setActiveCell({ roomId: room.id, date: iso, anchor: { top: rect.bottom + 4, left } });
                             }}
-                            className="h-6 w-full rounded hover:bg-slate-100"
+                            className="h-8 w-full rounded-md hover:bg-slate-100"
                           />
                         )}
                         {isActive && (
-                          <BlockForm
+                          <EmptyCellPopover
                             hotelId={hotelId}
-                            roomId={room.id}
+                            room={room}
                             date={iso}
+                            isToday={iso === todayIso}
                             anchor={activeCell.anchor}
                             onCancel={() => setActiveCell(null)}
                             onDone={() => {
@@ -461,58 +958,6 @@ export default function CalendarPage() {
                             }}
                           />
                         )}
-                        {isActionOpen && (
-                          <CellActionPopover
-                            hotelId={hotelId}
-                            info={activeAction.info}
-                            anchor={activeAction.anchor}
-                            onCancel={() => setActiveAction(null)}
-                            onDone={() => {
-                              setActiveAction(null);
-                              reload();
-                            }}
-                          />
-                        )}
-                        {isHovered && hoveredCell.kind === 'booking' && (() => {
-                          const booking = bookings.find((b) => b.id === hoveredCell.id);
-                          if (!booking) return null;
-                          return (
-                            <HoverPreview anchor={hoveredCell.anchor}>
-                              <div className="flex items-center justify-between gap-2">
-                                <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
-                                  {booking.guest.fullName}
-                                  <GuestBadges guest={booking.guest} />
-                                </p>
-                                <StatusBadge status={booking.status} />
-                              </div>
-                              <p className="text-xs text-slate-500">
-                                {formatDate(booking.checkInDate)} → {formatDate(booking.checkOutDate)} · {nightsBetween(booking.checkInDate, booking.checkOutDate)} night(s)
-                              </p>
-                              <p className="text-xs text-slate-500">
-                                Room{booking.bookingRooms.length > 1 ? 's' : ''}:{' '}
-                                {booking.bookingRooms.map((br) => `${br.room.roomNumber} (${br.occupants})`).join(', ')}
-                              </p>
-                              {(booking.guest.email || booking.guest.phone) && (
-                                <p className="text-xs text-slate-500">{[booking.guest.email, booking.guest.phone].filter(Boolean).join(' · ')}</p>
-                              )}
-                              <p className="text-xs text-slate-400">Source: {booking.source}</p>
-                            </HoverPreview>
-                          );
-                        })()}
-                        {isHovered && hoveredCell.kind === 'block' && (() => {
-                          const block = blocks.find((bl) => bl.id === hoveredCell.id);
-                          if (!block) return null;
-                          return (
-                            <HoverPreview anchor={hoveredCell.anchor}>
-                              <p className="text-sm font-semibold text-slate-900">Room blocked</p>
-                              <p className="text-xs text-slate-500">Reason: {block.reason}</p>
-                              <p className="text-xs text-slate-500">
-                                {formatDate(block.startDate)} → {formatDate(block.endDate)}
-                              </p>
-                              {block.notes && <p className="text-xs text-slate-500">{block.notes}</p>}
-                            </HoverPreview>
-                          );
-                        })()}
                       </td>
                     );
                   })}

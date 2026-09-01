@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CalendarPlus, DoorOpen, Plus, Search, Trash2 } from 'lucide-react';
-import { apiFetch, ApiError } from '@/lib/api';
+import { CalendarPlus, Download, DoorOpen, Plus, Search, Trash2 } from 'lucide-react';
+import { apiFetch, ApiError, downloadFile } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { formatTime12h } from '@/lib/format';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, Select } from '@/components/ui/primitives';
@@ -51,6 +51,7 @@ interface Folio {
   grandTotal: number;
   alreadyPaid: number;
   balanceDue: number;
+  refundDue: number;
 }
 
 function emptyLine(): LineItem {
@@ -133,10 +134,17 @@ function FolioSummary({
               <span>-{money(folio.alreadyPaid)}</span>
             </div>
           )}
-          <div className="mt-1.5 flex justify-between border-t border-slate-200 pt-1.5 text-base font-semibold text-brand-800">
-            <span>Amount to be paid</span>
-            <span>{money(folio.balanceDue)}</span>
-          </div>
+          {folio.refundDue > 0 ? (
+            <div className="mt-1.5 flex justify-between border-t border-slate-200 pt-1.5 text-base font-semibold text-amber-700">
+              <span>Refund due to guest</span>
+              <span>{money(folio.refundDue)}</span>
+            </div>
+          ) : (
+            <div className="mt-1.5 flex justify-between border-t border-slate-200 pt-1.5 text-base font-semibold text-brand-800">
+              <span>Amount to be paid</span>
+              <span>{money(folio.balanceDue)}</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -153,8 +161,9 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
   const [previewLoading, setPreviewLoading] = useState(false);
   const [waiveLateFee, setWaiveLateFee] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ grandTotal: string } | null>(null);
+  const [result, setResult] = useState<{ id: string; grandTotal: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   // Charges logged against this stay while it was in progress (see the Rooms
   // page's per-room "charges" popover) — fetched here so checkout doesn't
@@ -216,7 +225,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
     setError(null);
     setSubmitting(true);
     try {
-      const invoice = await apiFetch<{ grandTotal: string }>('/checkout', {
+      const invoice = await apiFetch<{ id: string; grandTotal: string }>('/checkout', {
         method: 'POST',
         body: JSON.stringify({
           bookingId: booking.id,
@@ -228,7 +237,6 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
         }),
       });
       setResult(invoice);
-      setTimeout(onDone, 1500);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Checkout failed');
     } finally {
@@ -236,10 +244,30 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
     }
   }
 
+  async function handleDownloadInvoice() {
+    if (!result) return;
+    setDownloading(true);
+    try {
+      await downloadFile(`/invoices/${result.id}/pdf`, `invoice-${result.id.slice(0, 8)}.pdf`);
+    } catch {
+      setError('Failed to download invoice');
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   if (result) {
     return (
       <Card className="p-5">
         <p className="text-sm font-medium text-emerald-700">Checked out — invoice total {result.grandTotal}</p>
+        {error && <div className="mt-2"><ErrorBanner>{error}</ErrorBanner></div>}
+        <div className="mt-3 flex gap-2">
+          <Button variant="secondary" onClick={handleDownloadInvoice} disabled={downloading}>
+            <Download className="h-4 w-4" />
+            {downloading ? 'Downloading…' : 'Download Invoice PDF'}
+          </Button>
+          <Button variant="ghost" onClick={onDone}>Done</Button>
+        </div>
       </Card>
     );
   }

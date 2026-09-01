@@ -649,9 +649,244 @@ function PricingRulesCard() {
 }
 
 const UNAVAILABLE_SECTIONS = [
-  { name: 'Users & Roles', icon: Users, note: 'Role assignment exists in the database (UserHotelRole), but there’s no API/UI to manage it yet.' },
   { name: 'Notifications', icon: Bell, note: 'No email/SMS/WhatsApp delivery is wired up yet.' },
 ];
+
+const ROLE_OPTIONS = ['OWNER', 'MANAGER', 'RECEPTIONIST', 'HOUSEKEEPING', 'FINANCE'] as const;
+const ROLE_LABELS: Record<string, string> = {
+  SUPER_ADMIN: 'Super Admin',
+  OWNER: 'Owner',
+  MANAGER: 'Manager',
+  RECEPTIONIST: 'Receptionist',
+  HOUSEKEEPING: 'Housekeeping',
+  FINANCE: 'Finance',
+};
+
+interface RoleGrant {
+  grantId: string;
+  role: string;
+  hotelWide: boolean;
+}
+
+interface StaffUser {
+  id: string;
+  email: string;
+  fullName: string;
+  phone: string | null;
+  isActive: boolean;
+  roles: RoleGrant[];
+}
+
+function emptyUserForm() {
+  return { email: '', fullName: '', phone: '', password: '', role: 'RECEPTIONIST' as string };
+}
+
+function UsersRolesCard() {
+  const { hotelId } = useCurrentHotel();
+  const [users, setUsers] = useState<StaffUser[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [formOpen, setFormOpen] = useState(false);
+  const [form, setForm] = useState(emptyUserForm());
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [addRoleFor, setAddRoleFor] = useState<string | null>(null);
+  const [addRoleValue, setAddRoleValue] = useState<string>('RECEPTIONIST');
+
+  function reload() {
+    if (!hotelId) return;
+    setLoading(true);
+    apiFetch<StaffUser[]>(`/users?hotelId=${hotelId}`)
+      .then(setUsers)
+      .catch(() => setUsers([]))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(reload, [hotelId]);
+
+  function closeForm() {
+    setFormOpen(false);
+    setForm(emptyUserForm());
+    setError(null);
+  }
+
+  async function handleCreate(e: React.FormEvent) {
+    e.preventDefault();
+    if (!hotelId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await apiFetch('/users', {
+        method: 'POST',
+        body: JSON.stringify({
+          hotelId,
+          email: form.email.trim(),
+          fullName: form.fullName.trim(),
+          phone: form.phone.trim() || undefined,
+          password: form.password,
+          role: form.role,
+        }),
+      });
+      closeForm();
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to create user');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleAddRole(userId: string) {
+    if (!hotelId) return;
+    try {
+      await apiFetch(`/users/${userId}/roles`, { method: 'POST', body: JSON.stringify({ hotelId, role: addRoleValue }) });
+      setAddRoleFor(null);
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to add role');
+    }
+  }
+
+  async function handleRevokeRole(grantId: string) {
+    if (!hotelId) return;
+    try {
+      await apiFetch(`/users/roles/${grantId}?hotelId=${hotelId}`, { method: 'DELETE' });
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to remove role');
+    }
+  }
+
+  async function handleToggleActive(user: StaffUser) {
+    if (!hotelId) return;
+    try {
+      await apiFetch(`/users/${user.id}/status`, { method: 'PATCH', body: JSON.stringify({ hotelId, isActive: !user.isActive }) });
+      reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to update user');
+    }
+  }
+
+  return (
+    <Card className="p-5 md:col-span-2">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+            <Users className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="font-medium text-slate-900">Users &amp; Roles</div>
+            <p className="text-sm text-slate-500">Staff accounts and what they can do at this property.</p>
+          </div>
+        </div>
+        {!formOpen && (
+          <Button variant="secondary" onClick={() => setFormOpen(true)} className="shrink-0">
+            <Plus className="h-4 w-4" /> Add user
+          </Button>
+        )}
+      </div>
+
+      {error && <div className="mb-3"><ErrorBanner>{error}</ErrorBanner></div>}
+
+      {formOpen && (
+        <form onSubmit={handleCreate} className="mb-4 space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="user-name">Full name</Label>
+              <Input id="user-name" required value={form.fullName} onChange={(e) => setForm({ ...form, fullName: e.target.value })} />
+            </div>
+            <div>
+              <Label htmlFor="user-email">Email</Label>
+              <Input id="user-email" type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+            </div>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <Label htmlFor="user-phone">Phone (optional)</Label>
+              <Input id="user-phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+            </div>
+            <div>
+              <Label htmlFor="user-password">Temporary password</Label>
+              <Input id="user-password" type="password" required minLength={8} value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+            </div>
+            <div>
+              <Label htmlFor="user-role">Role</Label>
+              <Select id="user-role" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                {ROLE_OPTIONS.map((r) => (
+                  <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                ))}
+              </Select>
+            </div>
+          </div>
+          <p className="text-xs text-slate-400">Share this password with them directly — there's no email invite flow yet.</p>
+          <div className="flex items-center gap-2">
+            <Button type="submit" disabled={saving}>{saving ? 'Creating…' : 'Create user'}</Button>
+            <button type="button" onClick={closeForm} className="text-sm text-slate-400 hover:text-slate-700">Cancel</button>
+          </div>
+        </form>
+      )}
+
+      {loading ? (
+        <p className="text-sm text-slate-400">Loading…</p>
+      ) : users.length === 0 ? (
+        <p className="text-sm text-slate-400">No staff accounts yet — add one above.</p>
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {users.map((user) => (
+            <li key={user.id} className="py-2.5">
+              <div className="flex items-center justify-between gap-3">
+                <div className={`min-w-0 flex-1 ${user.isActive ? '' : 'opacity-50'}`}>
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium text-slate-900">{user.fullName}</span>
+                    {!user.isActive && <span className="shrink-0 text-xs text-slate-400">Deactivated</span>}
+                  </div>
+                  <p className="truncate text-xs text-slate-500">{user.email}{user.phone ? ` · ${user.phone}` : ''}</p>
+                </div>
+                <button onClick={() => handleToggleActive(user)} className="shrink-0 px-2 py-1 text-xs text-slate-400 hover:text-brand-700">
+                  {user.isActive ? 'Deactivate' : 'Reactivate'}
+                </button>
+              </div>
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {user.roles.map((grant) => (
+                  <span key={grant.grantId} className="flex items-center gap-1 rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">
+                    {ROLE_LABELS[grant.role] ?? grant.role}
+                    {grant.hotelWide && <ShieldCheck className="h-3 w-3" />}
+                    {!grant.hotelWide && (
+                      <button onClick={() => handleRevokeRole(grant.grantId)} className="text-brand-400 hover:text-rose-600">
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    )}
+                  </span>
+                ))}
+                {addRoleFor === user.id ? (
+                  <span className="flex items-center gap-1">
+                    <Select value={addRoleValue} onChange={(e) => setAddRoleValue(e.target.value)} className="h-6 w-32 py-0 text-xs">
+                      {ROLE_OPTIONS.map((r) => (
+                        <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                      ))}
+                    </Select>
+                    <button onClick={() => handleAddRole(user.id)} className="text-brand-700 hover:underline">
+                      <Check className="h-3.5 w-3.5" />
+                    </button>
+                    <button onClick={() => setAddRoleFor(null)} className="text-slate-400 hover:text-slate-700">
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => { setAddRoleFor(user.id); setAddRoleValue('RECEPTIONIST'); }}
+                    className="flex items-center gap-0.5 rounded-full px-2 py-0.5 text-xs text-slate-400 hover:text-brand-700"
+                  >
+                    <Plus className="h-3 w-3" /> Add role
+                  </button>
+                )}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
+  );
+}
 
 export default function SettingsPage() {
   const { hotelId, ready } = useCurrentHotel();
@@ -666,6 +901,7 @@ export default function SettingsPage() {
         <HotelProfileCard />
         <RoomTypesCard />
         <PricingRulesCard />
+        <UsersRolesCard />
         {UNAVAILABLE_SECTIONS.map(({ name, icon: Icon, note }) => (
           <Card key={name} className="flex items-start gap-3 p-5 opacity-60">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">

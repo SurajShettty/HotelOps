@@ -13,6 +13,7 @@ import {
   LayoutDashboard,
   LogIn,
   LogOut,
+  Search,
   Settings,
   Sparkles,
   Users,
@@ -20,10 +21,12 @@ import {
 import { clearSession, getToken, getUser, StoredUser } from '@/lib/auth';
 import { apiFetch } from '@/lib/api';
 import { HotelProvider, useCurrentHotel } from '@/lib/hotel-context';
+import { NotificationsBell } from '@/components/ui/notifications-bell';
 
 const NAV_ITEMS = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/rooms', label: 'Rooms', icon: Bed },
+  { href: '/availability', label: 'Availability', icon: Search },
   { href: '/bookings', label: 'Bookings', icon: CalendarRange },
   { href: '/calendar', label: 'Calendar', icon: CalendarRange },
   { href: '/guests', label: 'Guests', icon: Users },
@@ -94,9 +97,12 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50">
       <aside className="flex w-64 shrink-0 flex-col border-r border-slate-200 bg-brand-950 text-brand-100">
-        <div className="flex items-center gap-2 px-5 py-5 text-white">
-          <Building2 className="h-5 w-5 text-gold-400" />
-          <span className="text-base font-semibold tracking-tight">HotelOps</span>
+        <div className="flex items-center justify-between px-5 py-5 text-white">
+          <div className="flex items-center gap-2">
+            <Building2 className="h-5 w-5 text-gold-400" />
+            <span className="text-base font-semibold tracking-tight">HotelOps</span>
+          </div>
+          <NotificationsBell />
         </div>
 
         <div className="px-4 pb-4">

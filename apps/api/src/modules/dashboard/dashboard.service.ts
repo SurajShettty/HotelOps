@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { localTimeHHmm } from '../../common/date.util';
 
 // Matches the PRD's housekeeping-turnaround KPI (dirty -> ready in < 45 min
 // average) — a task open longer than that is worth flagging to an owner.
@@ -23,18 +24,32 @@ export class DashboardService {
     const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
     const monthStart = startOfMonth(now);
 
-    const [revenueToday, revenueMonthToDate, roomsNotReadyForArrivals, overdueHousekeeping, roomsOutOfService] =
-      await Promise.all([
-        this.netRevenue(hotelId, todayStart, tomorrowStart),
-        this.netRevenue(hotelId, monthStart, tomorrowStart),
-        this.getRoomsNotReadyForArrivals(hotelId, todayStart, tomorrowStart),
-        this.getOverdueHousekeeping(hotelId, now),
-        this.getRoomsOutOfService(hotelId, now),
-      ]);
+    const [
+      revenueToday,
+      revenueMonthToDate,
+      roomsNotReadyForArrivals,
+      overdueHousekeeping,
+      roomsOutOfService,
+      noShows,
+      overstays,
+      arrivalsToday,
+      departuresToday,
+    ] = await Promise.all([
+      this.netRevenue(hotelId, todayStart, tomorrowStart),
+      this.netRevenue(hotelId, monthStart, tomorrowStart),
+      this.getRoomsNotReadyForArrivals(hotelId, todayStart, tomorrowStart),
+      this.getOverdueHousekeeping(hotelId, now),
+      this.getRoomsOutOfService(hotelId, now),
+      this.getNoShows(hotelId, todayStart),
+      this.getOverstays(hotelId, now, todayStart, tomorrowStart),
+      this.getArrivalsCompletedToday(hotelId, todayStart, tomorrowStart),
+      this.getDeparturesCompletedToday(hotelId, todayStart, tomorrowStart),
+    ]);
 
     return {
       revenue: { today: revenueToday, monthToDate: revenueMonthToDate },
-      alerts: { roomsNotReadyForArrivals, overdueHousekeeping, roomsOutOfService },
+      today: { arrivals: arrivalsToday, departures: departuresToday },
+      alerts: { roomsNotReadyForArrivals, overdueHousekeeping, roomsOutOfService, noShows, overstays },
     };
   }
 
@@ -114,5 +129,143 @@ export class DashboardService {
       }
     }
     return Array.from(byRoomId.values());
+  }
+
+  // Still CONFIRMED (never checked in) with a checkInDate before today —
+  // resolved by either checking them in late or POST /bookings/:id/no-show.
+  private async getNoShows(hotelId: string, todayStart: Date) {
+    const bookings = await this.prisma.booking.findMany({
+      where: { hotelId, status: 'CONFIRMED', checkInDate: { lt: todayStart } },
+      include: { guest: true, bookingRooms: { include: { room: true } } },
+      orderBy: { checkInDate: 'asc' },
+    });
+
+    return bookings.map((b) => ({
+      bookingId: b.id,
+      guestName: b.guest.fullName,
+      roomNumbers: b.bookingRooms.map((br) => br.room.roomNumber),
+      checkInDate: b.checkInDate,
+    }));
+  }
+
+  // Still CHECKED_IN past their checkOutDate — either a prior day entirely,
+  // or today but only once the hotel's standard check-out time has actually
+  // passed (a guest checking out later this afternoon isn't late yet). Same
+  // "is it late right now" check as the late-check-out fee at actual checkout
+  // (CheckoutService.computeFolio) — this just surfaces it proactively.
+  private async getOverstays(hotelId: string, now: Date, todayStart: Date, tomorrowStart: Date) {
+    const hotel = await this.prisma.hotel.findUniqueOrThrow({ where: { id: hotelId } });
+    const pastCheckOutTimeToday = localTimeHHmm(now, hotel.timezone) > hotel.checkOutTime;
+    const cutoff = pastCheckOutTimeToday ? tomorrowStart : todayStart;
+
+    const bookings = await this.prisma.booking.findMany({
+      where: { hotelId, status: 'CHECKED_IN', checkOutDate: { lt: cutoff } },
+      include: { guest: true, bookingRooms: { include: { room: true } } },
+      orderBy: { checkOutDate: 'asc' },
+    });
+
+    return bookings.map((b) => ({
+      bookingId: b.id,
+      guestName: b.guest.fullName,
+      roomNumbers: b.bookingRooms.map((br) => br.room.roomNumber),
+      checkOutDate: b.checkOutDate,
+      checkOutTime: hotel.checkOutTime,
+      dueToday: b.checkOutDate >= todayStart,
+    }));
+  }
+
+  // Arrivals *completed* today — checkInDate is stamped with the actual
+  // arrival date at check-in (see CheckinService), so this counts bookings
+  // that have moved past CONFIRMED, not ones merely due to arrive. A guest
+  // who both arrived and departed today still counts here.
+  private async getArrivalsCompletedToday(hotelId: string, todayStart: Date, tomorrowStart: Date) {
+    return this.prisma.booking.count({
+      where: {
+        hotelId,
+        checkInDate: { gte: todayStart, lt: tomorrowStart },
+        status: { in: ['CHECKED_IN', 'CHECKED_OUT', 'COMPLETED'] },
+      },
+    });
+  }
+
+  // Checkouts *completed* today — checkOutDate is stamped with the actual
+  // departure date at checkout (see CheckoutService), so this counts
+  // bookings that have actually checked out, not ones merely due to leave.
+  private async getDeparturesCompletedToday(hotelId: string, todayStart: Date, tomorrowStart: Date) {
+    return this.prisma.booking.count({
+      where: {
+        hotelId,
+        checkOutDate: { gte: todayStart, lt: tomorrowStart },
+        status: { in: ['CHECKED_OUT', 'COMPLETED'] },
+      },
+    });
+  }
+
+  /**
+   * Day-by-day revenue and occupancy for the trailing `days` days (today
+   * included), plus a booking-source breakdown over the same window — feeds
+   * the Dashboard's trend charts.
+   *
+   * Occupancy per day is a historical reconstruction: which rooms had an
+   * active (non-cancelled/no-show/draft) booking covering that date, not a
+   * snapshot of Room.status (which only reflects *right now*). Revenue
+   * reuses the same CHARGE-minus-REFUND definition as the summary KPI.
+   */
+  async getTrends(hotelId: string, days: number) {
+    const now = new Date();
+    const todayStart = startOfDay(now);
+    const rangeEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+    const rangeStart = new Date(todayStart.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
+
+    const [totalRooms, activeBookings, sourceRows] = await Promise.all([
+      this.prisma.room.count({ where: { hotelId } }),
+      this.prisma.booking.findMany({
+        where: {
+          hotelId,
+          status: { notIn: ['CANCELLED', 'NO_SHOW', 'DRAFT'] },
+          checkInDate: { lt: rangeEnd },
+          checkOutDate: { gt: rangeStart },
+        },
+        select: { checkInDate: true, checkOutDate: true, bookingRooms: { select: { roomId: true } } },
+      }),
+      this.prisma.booking.groupBy({
+        by: ['source'],
+        where: {
+          hotelId,
+          status: { notIn: ['CANCELLED', 'NO_SHOW', 'DRAFT'] },
+          checkInDate: { lt: rangeEnd },
+          checkOutDate: { gt: rangeStart },
+        },
+        _count: { _all: true },
+      }),
+    ]);
+
+    const dayStarts: Date[] = [];
+    for (let d = rangeStart; d < rangeEnd; d = new Date(d.getTime() + 24 * 60 * 60 * 1000)) {
+      dayStarts.push(d);
+    }
+
+    const revenueByDay = await Promise.all(
+      dayStarts.map((d) => this.netRevenue(hotelId, d, new Date(d.getTime() + 24 * 60 * 60 * 1000))),
+    );
+
+    const dayRows = dayStarts.map((d, i) => {
+      const occupiedRoomIds = new Set<string>();
+      for (const b of activeBookings) {
+        if (b.checkInDate <= d && b.checkOutDate > d) {
+          for (const br of b.bookingRooms) occupiedRoomIds.add(br.roomId);
+        }
+      }
+      return {
+        date: d.toISOString().slice(0, 10),
+        revenue: revenueByDay[i],
+        occupancyPct: totalRooms > 0 ? Math.round((occupiedRoomIds.size / totalRooms) * 100) : 0,
+      };
+    });
+
+    return {
+      days: dayRows,
+      bookingSources: sourceRows.map((r) => ({ source: r.source, count: r._count._all })),
+    };
   }
 }

@@ -16,6 +16,9 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { RoomChargesModule } from './modules/room-charges/room-charges.module';
 import { PricingRulesModule } from './modules/pricing-rules/pricing-rules.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
+import { InvoicesModule } from './modules/invoices/invoices.module';
+import { UsersModule } from './modules/users/users.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -37,6 +40,9 @@ import { RolesGuard } from './common/guards/roles.guard';
     DashboardModule,
     RoomChargesModule,
     PricingRulesModule,
+    NotificationsModule,
+    InvoicesModule,
+    UsersModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
