@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsEnum, IsNumber, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsEnum, IsNumber, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
 
 export class LineItem {
   @IsString()
@@ -40,4 +40,8 @@ export class CheckoutDto {
   @IsOptional()
   @IsNumber()
   taxRatePercent?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  waiveLateCheckOutFee?: boolean;
 }

@@ -171,6 +171,54 @@ export class BookingsService {
   }
 
   /**
+   * If `roomIds` aren't free for [checkIn, checkOut) only because a
+   * not-yet-arrived guest (status CONFIRMED, single-room booking) holds one
+   * of them, try to bump that guest into another room of the same type for
+   * their own stay instead of disturbing the guest who is already here.
+   * Best-effort: leaves anything it can't resolve (a CHECKED_IN occupant, a
+   * multi-room booking, no same-type room free, or a maintenance block) for
+   * the subsequent assertRoomsAvailable call to report as usual.
+   */
+  private async relocateConflictingBookings(
+    tx: Prisma.TransactionClient,
+    params: { hotelId: string; roomIds: string[]; checkIn: Date; checkOut: Date; excludeBookingId: string },
+  ) {
+    const { hotelId, roomIds, checkIn, checkOut, excludeBookingId } = params;
+
+    const conflicts = await tx.bookingRoom.findMany({
+      where: {
+        roomId: { in: roomIds },
+        booking: {
+          status: 'CONFIRMED',
+          id: { not: excludeBookingId },
+          checkInDate: { lt: checkOut },
+          checkOutDate: { gt: checkIn },
+        },
+      },
+      include: { booking: { include: { bookingRooms: true } }, room: true },
+    });
+
+    for (const conflict of conflicts) {
+      if (conflict.booking.bookingRooms.length > 1) continue;
+
+      const alternates = await this.availabilityService.findAvailableRooms(
+        {
+          hotelId,
+          checkIn: conflict.booking.checkInDate,
+          checkOut: conflict.booking.checkOutDate,
+          roomTypeId: conflict.room.roomTypeId,
+          excludeBookingId: conflict.booking.id,
+        },
+        tx,
+      );
+      const alternate = alternates.find((r) => !roomIds.includes(r.id));
+      if (!alternate) continue;
+
+      await tx.bookingRoom.update({ where: { id: conflict.id }, data: { roomId: alternate.id } });
+    }
+  }
+
+  /**
    * A checked-in guest decides to stay longer. Extends checkOutDate, either
    * in the same room(s) or — if a `roomId` is given — moving a single-room
    * stay into a different room for the extended nights. The rate already
@@ -207,6 +255,16 @@ export class BookingsService {
         if (!room || room.hotelId !== dto.hotelId) {
           throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Room does not belong to this hotel' });
         }
+      }
+
+      if (!isMove) {
+        await this.relocateConflictingBookings(tx, {
+          hotelId: dto.hotelId,
+          roomIds: targetRoomIds,
+          checkIn: existing.checkOutDate,
+          checkOut: newCheckOut,
+          excludeBookingId: id,
+        });
       }
 
       await this.availabilityService.assertRoomsAvailable(tx, {

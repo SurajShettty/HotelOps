@@ -276,42 +276,42 @@ export default function RoomsPage() {
       <PageHeader title="Rooms" subtitle="Room types and inventory for this property." />
       {error && <div className="mb-4"><ErrorBanner>{error}</ErrorBanner></div>}
 
-      <Card className="mb-4 flex flex-nowrap items-center gap-3 overflow-x-auto p-3">
+      <Card className="mb-4 flex flex-nowrap items-center gap-2 p-3">
         <button
           type="button"
           onClick={() => setShowAddType((v) => !v)}
-          className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+          className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-sm font-medium transition-colors ${
             showAddType ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-300 text-slate-700 hover:bg-slate-50'
           }`}
         >
-          <Plus className="h-4 w-4" /> Add Room Type
+          <Plus className="h-4 w-4" /> Room Type
           <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAddType ? 'rotate-180' : ''}`} />
         </button>
         <button
           type="button"
           onClick={() => setShowAddRoom((v) => !v)}
-          className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+          className={`flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-sm font-medium transition-colors ${
             showAddRoom ? 'border-brand-300 bg-brand-50 text-brand-700' : 'border-slate-300 text-slate-700 hover:bg-slate-50'
           }`}
         >
-          <Plus className="h-4 w-4" /> Add Room
+          <Plus className="h-4 w-4" /> Room
           <ChevronDown className={`h-3.5 w-3.5 transition-transform ${showAddRoom ? 'rotate-180' : ''}`} />
         </button>
 
-        <span className="mx-1 h-6 w-px shrink-0 bg-slate-200" />
+        <span className="h-6 w-px shrink-0 bg-slate-200" />
 
-        <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40 shrink-0">
+        <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="min-w-0 grow basis-32">
           {STATUS_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </Select>
-        <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="w-40 shrink-0">
+        <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="min-w-0 grow basis-32">
           <option value="">All room types</option>
           {roomTypes.map((t) => (
             <option key={t.id} value={t.id}>{t.name}</option>
           ))}
         </Select>
-        <Select value={floorFilter} onChange={(e) => setFloorFilter(e.target.value)} className="w-36 shrink-0">
+        <Select value={floorFilter} onChange={(e) => setFloorFilter(e.target.value)} className="min-w-0 grow basis-28">
           <option value="">All floors</option>
           {floors.map((f) => (
             <option key={f} value={f}>Floor {f}</option>

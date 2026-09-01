@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsNumber, IsOptional, IsUUID, ValidateNested } from 'class-validator';
+import { ArrayMinSize, IsArray, IsBoolean, IsNumber, IsOptional, IsUUID, ValidateNested } from 'class-validator';
 
 class RoomAssignmentInput {
   @IsUUID()
@@ -22,4 +22,11 @@ export class CheckinDto {
   @IsOptional()
   @IsNumber()
   depositAmount?: number;
+
+  // Front desk can waive the hotel's configured early check-in fee for this
+  // arrival (e.g. loyalty guest, room was ready anyway). No effect if the
+  // arrival isn't actually early, or the hotel has no fee configured.
+  @IsOptional()
+  @IsBoolean()
+  waiveEarlyCheckInFee?: boolean;
 }

@@ -17,3 +17,8 @@ export function addDaysUtc(date: Date, days: number): Date {
   copy.setUTCDate(copy.getUTCDate() + days);
   return copy;
 }
+
+/** The wall-clock "HH:mm" for `date` in IANA zone `timeZone` — e.g. for comparing against a hotel's check-in/check-out policy time. */
+export function localTimeHHmm(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+}

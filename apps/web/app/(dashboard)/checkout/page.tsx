@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { CalendarPlus, DoorOpen, Plus, Search, Trash2 } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
+import { formatTime12h } from '@/lib/format';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, Select } from '@/components/ui/primitives';
 import { PageHeader } from '@/components/ui/primitives';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
@@ -19,6 +20,8 @@ interface Booking {
 interface AvailableRoom {
   id: string;
   roomNumber: string;
+  floor: string | null;
+  roomType: { id: string; name: string };
 }
 
 interface LineItem {
@@ -39,6 +42,9 @@ interface Folio {
   roomSubtotal: number;
   chargesTotal: number;
   discountTotal: number;
+  lateCheckOutApplicable: boolean;
+  lateCheckOutFee: number;
+  lateCheckOutTime: string;
   subtotal: number;
   taxRate: number;
   taxTotal: number;
@@ -55,7 +61,19 @@ function money(n: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function FolioSummary({ folio, loading, plannedCheckOut }: { folio: Folio | null; loading: boolean; plannedCheckOut: string }) {
+function FolioSummary({
+  folio,
+  loading,
+  plannedCheckOut,
+  waiveLateFee,
+  onWaiveLateFeeChange,
+}: {
+  folio: Folio | null;
+  loading: boolean;
+  plannedCheckOut: string;
+  waiveLateFee: boolean;
+  onWaiveLateFeeChange: (v: boolean) => void;
+}) {
   const departureChanged = folio && folio.actualCheckOut.slice(0, 10) !== plannedCheckOut.slice(0, 10);
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm">
@@ -68,6 +86,17 @@ function FolioSummary({ folio, loading, plannedCheckOut }: { folio: Folio | null
               Checking out today ({folio.actualCheckOut.slice(0, 10)}) instead of the booked date ({plannedCheckOut.slice(0, 10)}) — billed for the actual stay.
             </p>
           )}
+          {folio.lateCheckOutApplicable && (
+            <label className="mb-2 flex items-center gap-1.5 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">
+              <input
+                type="checkbox"
+                checked={waiveLateFee}
+                onChange={(e) => onWaiveLateFeeChange(e.target.checked)}
+                className="h-3.5 w-3.5 rounded border-slate-300"
+              />
+              Checking out after {formatTime12h(folio.lateCheckOutTime)} — waive the late check-out fee?
+            </label>
+          )}
           <div className="flex justify-between py-0.5 text-slate-600">
             <span>Room ({folio.nights} night{folio.nights === 1 ? '' : 's'})</span>
             <span>{money(folio.roomSubtotal)}</span>
@@ -76,6 +105,12 @@ function FolioSummary({ folio, loading, plannedCheckOut }: { folio: Folio | null
             <div className="flex justify-between py-0.5 text-slate-600">
               <span>Additional charges</span>
               <span>+{money(folio.chargesTotal)}</span>
+            </div>
+          )}
+          {folio.lateCheckOutFee > 0 && (
+            <div className="flex justify-between py-0.5 text-slate-600">
+              <span>Late check-out fee</span>
+              <span>+{money(folio.lateCheckOutFee)}</span>
             </div>
           )}
           {folio.discountTotal > 0 && (
@@ -116,6 +151,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
   const [paymentAmountTouched, setPaymentAmountTouched] = useState(false);
   const [folio, setFolio] = useState<Folio | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [waiveLateFee, setWaiveLateFee] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{ grandTotal: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -161,6 +197,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
           bookingId: booking.id,
           additionalCharges: charges.filter((c) => c.description && c.amount).map((c) => ({ description: c.description, amount: Number(c.amount) })),
           discounts: discounts.filter((d) => d.description && d.amount).map((d) => ({ description: d.description, amount: Number(d.amount) })),
+          waiveLateCheckOutFee: waiveLateFee,
         }),
       })
         .then((f) => {
@@ -172,7 +209,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
     }, 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [JSON.stringify(charges), JSON.stringify(discounts), loggedChargesVersion]);
+  }, [JSON.stringify(charges), JSON.stringify(discounts), loggedChargesVersion, waiveLateFee]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -187,6 +224,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
           discounts: discounts.filter((d) => d.description && d.amount).map((d) => ({ description: d.description, amount: Number(d.amount) })),
           paymentMethod,
           paymentAmount: Number(paymentAmount || 0),
+          waiveLateCheckOutFee: waiveLateFee,
         }),
       });
       setResult(invoice);
@@ -268,7 +306,13 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
           ))}
         </div>
 
-        <FolioSummary folio={folio} loading={previewLoading} plannedCheckOut={booking.checkOutDate} />
+        <FolioSummary
+          folio={folio}
+          loading={previewLoading}
+          plannedCheckOut={booking.checkOutDate}
+          waiveLateFee={waiveLateFee}
+          onWaiveLateFeeChange={setWaiveLateFee}
+        />
 
         <div className="grid grid-cols-2 gap-3">
           <div>
@@ -325,8 +369,14 @@ function ExtendStayForm({ hotelId, booking, onDone, onCancel }: { hotelId: strin
   const [selectedRoomId, setSelectedRoomId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set once an in-place extend attempt comes back ROOM_UNAVAILABLE — i.e. the
+  // server couldn't free up the current room by relocating an incoming
+  // (not-yet-arrived) reservation into another same-type room either. Only
+  // then do we fall back to asking the front desk to move this guest.
+  const [autoRelocateFailed, setAutoRelocateFailed] = useState(false);
 
   useEffect(() => {
+    setAutoRelocateFailed(false);
     if (!newCheckOut) {
       setAvailableRooms([]);
       return;
@@ -361,6 +411,13 @@ function ExtendStayForm({ hotelId, booking, onDone, onCancel }: { hotelId: strin
       });
       onDone();
     } catch (err) {
+      // Only give up on keeping the guest in place once the server has
+      // actually tried and failed to bump the incoming reservation elsewhere.
+      if (!roomId && err instanceof ApiError && err.code === 'ROOM_UNAVAILABLE') {
+        setAutoRelocateFailed(true);
+        setError(null);
+        return;
+      }
       setError(err instanceof ApiError ? err.message : 'Failed to extend stay');
     } finally {
       setSubmitting(false);
@@ -390,9 +447,19 @@ function ExtendStayForm({ hotelId, booking, onDone, onCancel }: { hotelId: strin
               <p className="text-sm text-emerald-800">Both/all rooms are available through {newCheckOut}.</p>
               <Button onClick={() => handleExtend()} disabled={submitting}>{submitting ? 'Extending…' : 'Extend Stay'}</Button>
             </div>
+          ) : !autoRelocateFailed ? (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <p className="text-sm text-amber-800">
+                Not all rooms are free through {newCheckOut} yet — one may be booked by an upcoming reservation. We'll try moving that
+                reservation elsewhere first.
+              </p>
+              <Button onClick={() => handleExtend()} disabled={submitting} className="shrink-0">
+                {submitting ? 'Trying…' : 'Extend Stay'}
+              </Button>
+            </div>
           ) : (
             <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
-              Not all of this booking's rooms are free through {newCheckOut} — multi-room moves aren't supported here; adjust the date or edit the booking manually.
+              Couldn't free up all of this booking's rooms through {newCheckOut} automatically — multi-room moves aren't supported here; adjust the date or edit the booking manually.
             </p>
           )
         ) : sameRoomAvailable ? (
@@ -400,21 +467,52 @@ function ExtendStayForm({ hotelId, booking, onDone, onCancel }: { hotelId: strin
             <p className="text-sm text-emerald-800">Room {currentRoom?.roomNumber} is free through {newCheckOut} — no need to move.</p>
             <Button onClick={() => handleExtend()} disabled={submitting}>{submitting ? 'Extending…' : 'Extend Stay'}</Button>
           </div>
-        ) : otherRooms.length > 0 ? (
-          <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+        ) : !autoRelocateFailed ? (
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
             <p className="text-sm text-amber-800">
-              Room {currentRoom?.roomNumber} isn't free through {newCheckOut}, but another room is available to move into:
+              Room {currentRoom?.roomNumber} isn't free through {newCheckOut} — it's booked by an upcoming reservation. We'll try moving
+              that reservation into another room of the same type so this guest doesn't have to move.
             </p>
-            <div className="flex gap-2">
-              <Select value={selectedRoomId} onChange={(e) => setSelectedRoomId(e.target.value)} className="flex-1">
-                {otherRooms.map((r) => (
-                  <option key={r.id} value={r.id}>Room {r.roomNumber}</option>
-                ))}
-              </Select>
-              <Button onClick={() => handleExtend(selectedRoomId)} disabled={submitting || !selectedRoomId}>
-                {submitting ? 'Moving…' : 'Move & Extend'}
-              </Button>
+            <Button onClick={() => handleExtend()} disabled={submitting} className="shrink-0">
+              {submitting ? 'Trying…' : 'Extend Stay'}
+            </Button>
+          </div>
+        ) : otherRooms.length > 0 ? (
+          <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm text-amber-800">
+              Couldn't free up Room {currentRoom?.roomNumber} automatically — move this guest into another room instead:
+            </p>
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {otherRooms.map((r) => {
+                const selected = selectedRoomId === r.id;
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => setSelectedRoomId(r.id)}
+                    className={`flex items-start gap-2 rounded-lg border p-2.5 text-left transition-colors ${
+                      selected
+                        ? 'border-brand-600 bg-brand-50 ring-1 ring-inset ring-brand-600'
+                        : 'border-slate-200 bg-white hover:border-brand-300 hover:bg-brand-50/40'
+                    }`}
+                  >
+                    <DoorOpen className={`mt-0.5 h-4 w-4 shrink-0 ${selected ? 'text-brand-700' : 'text-slate-400'}`} />
+                    <span className="min-w-0">
+                      <span className={`block truncate text-sm font-medium ${selected ? 'text-brand-900' : 'text-slate-900'}`}>
+                        Room {r.roomNumber}
+                      </span>
+                      <span className="block truncate text-xs text-slate-500">
+                        {r.roomType.name}
+                        {r.floor ? ` · Floor ${r.floor}` : ''}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
+            <Button onClick={() => handleExtend(selectedRoomId)} disabled={submitting || !selectedRoomId} className="w-full sm:w-auto">
+              {submitting ? 'Moving…' : 'Move & Extend'}
+            </Button>
           </div>
         ) : (
           <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
@@ -437,6 +535,7 @@ export default function CheckoutPage() {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [extendingId, setExtendingId] = useState<string | null>(null);
   const [roomSearch, setRoomSearch] = useState('');
+  const [checkOutTime, setCheckOutTime] = useState<string | null>(null);
 
   function reload() {
     if (!hotelId) return;
@@ -451,6 +550,13 @@ export default function CheckoutPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, hotelId]);
 
+  useEffect(() => {
+    if (!hotelId) return;
+    apiFetch<{ checkOutTime: string }>(`/hotels/${hotelId}`)
+      .then((h) => setCheckOutTime(h.checkOutTime))
+      .catch(() => setCheckOutTime(null));
+  }, [hotelId]);
+
   const visibleStays = roomSearch.trim()
     ? stays.filter((b) => b.bookingRooms.some((br) => br.room.roomNumber.toLowerCase().includes(roomSearch.trim().toLowerCase())))
     : stays;
@@ -460,7 +566,10 @@ export default function CheckoutPage() {
 
   return (
     <div>
-      <PageHeader title="Check-Out" subtitle="Guests currently staying, ready to settle up." />
+      <PageHeader
+        title="Check-Out"
+        subtitle={`Guests currently staying, ready to settle up.${checkOutTime ? ` Standard check-out by ${formatTime12h(checkOutTime)}.` : ''}`}
+      />
 
       {stays.length > 0 && (
         <Card className="mb-4 p-3">

@@ -72,6 +72,11 @@ enum HousekeepingStatus {
   READY
 }
 
+enum PriceAdjustmentType {
+  PERCENTAGE
+  FIXED
+}
+
 // ---------- Models ----------
 
 model Hotel {
@@ -79,7 +84,14 @@ model Hotel {
   name      String
   timezone  String   @default("Asia/Kolkata")
   address   Json?
-  createdAt DateTime @default(now()) @map("created_at")
+  // Standard policy times, "HH:mm" 24-hour, compared against the wall-clock
+  // moment check-in/checkout is actually performed (in `timezone`) to decide
+  // whether the fees below apply. A fee of 0 effectively disables it.
+  checkInTime     String   @default("14:00") @map("check_in_time")
+  checkOutTime    String   @default("11:00") @map("check_out_time")
+  earlyCheckInFee Decimal  @default(0) @map("early_check_in_fee") @db.Decimal(10, 2)
+  lateCheckOutFee Decimal  @default(0) @map("late_check_out_fee") @db.Decimal(10, 2)
+  createdAt       DateTime @default(now()) @map("created_at")
 
   rooms          Room[]
   roomTypes      RoomType[]
@@ -87,6 +99,7 @@ model Hotel {
   bookings       Booking[]
   userHotelRoles UserHotelRole[]
   auditLogs      AuditLog[]
+  pricingRules   PricingRule[]
 
   @@map("hotels")
 }
@@ -144,11 +157,53 @@ model RoomType {
   baseRate      Decimal @map("base_rate") @db.Decimal(10, 2)
   amenities     Json    @default("[]")
 
-  hotel Hotel  @relation(fields: [hotelId], references: [id], onDelete: Cascade)
-  rooms Room[]
+  hotel        Hotel         @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  rooms        Room[]
+  pricingRules PricingRule[]
 
   @@unique([hotelId, name])
   @@map("room_types")
+}
+
+// A repriceable adjustment on top of a room type's base rate — seasonal
+// (bounded by startDate/endDate), day-of-week (weekend pricing, via
+// daysOfWeek), or a standing dynamic adjustment (neither set, always
+// applies). Rules aren't applied to bookings automatically anywhere yet;
+// GET /pricing-rules/quote lets Settings preview the resulting rate.
+model PricingRule {
+  id         String  @id @default(uuid())
+  hotelId    String  @map("hotel_id")
+  // NULL = applies to every room type at this hotel.
+  roomTypeId String? @map("room_type_id")
+  name       String
+
+  adjustmentType  PriceAdjustmentType @map("adjustment_type")
+  // Signed: positive raises the rate, negative discounts it. A percentage
+  // of -100 or lower would zero out (or invert) the rate, so it's rejected
+  // in the service layer rather than here.
+  adjustmentValue Decimal             @map("adjustment_value") @db.Decimal(6, 2)
+
+  // Both null = no date restriction. When set, half-open like booking dates:
+  // applies to nights in [startDate, endDate).
+  startDate DateTime? @map("start_date") @db.Date
+  endDate   DateTime? @map("end_date") @db.Date
+
+  // Empty = every day. Otherwise a subset of 0 (Sun) .. 6 (Sat), stored as
+  // JSON for the same reason RoomType.amenities is — no array column
+  // elsewhere in this schema and the set is always tiny.
+  daysOfWeek Json    @default("[]") @map("days_of_week")
+  active     Boolean @default(true)
+  // Stacking order when multiple rules match the same night — applied
+  // lowest to highest, each on top of the previous step's rate.
+  priority   Int     @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  hotel    Hotel     @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  roomType RoomType? @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+
+  @@index([hotelId])
+  @@map("pricing_rules")
 }
 
 model Room {

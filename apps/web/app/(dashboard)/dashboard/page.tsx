@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import {
   AlertTriangle,
+  ArrowRight,
   BedDouble,
   Building2,
   CheckCircle2,
@@ -33,6 +35,7 @@ interface Booking {
   checkInDate: string;
   checkOutDate: string;
   guest: { fullName: string } & GuestBadgeInfo;
+  bookingRooms: { room: { roomNumber: string } }[];
 }
 
 interface DashboardSummary {
@@ -260,30 +263,60 @@ export default function DashboardPage() {
 
       <div className="mt-6 grid gap-4 md:grid-cols-2">
         <Card className="p-5">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900">Arrivals today</h2>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-900">Arrivals today</h2>
+            {arrivals.length > 0 && (
+              <Link href="/checkin" className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">
+                Go to Check-In <ArrowRight className="h-3 w-3" />
+              </Link>
+            )}
+          </div>
           {arrivals.length === 0 ? (
             <p className="text-sm text-slate-400">No arrivals today.</p>
           ) : (
             <ul className="divide-y divide-slate-100">
               {arrivals.map((b) => (
-                <li key={b.id} className="flex items-center gap-1.5 py-2 text-sm text-slate-700">
-                  {b.guest.fullName}
-                  <GuestBadges guest={b.guest} />
+                <li key={b.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <span className="flex items-center gap-1.5 text-slate-700">
+                    {b.guest.fullName}
+                    <GuestBadges guest={b.guest} />
+                    <span className="text-slate-400">
+                      · Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+                    </span>
+                  </span>
+                  <Link href="/checkin" className="shrink-0 text-slate-400 hover:text-brand-700" title="Check in">
+                    <LogIn className="h-4 w-4" />
+                  </Link>
                 </li>
               ))}
             </ul>
           )}
         </Card>
         <Card className="p-5">
-          <h2 className="mb-3 text-sm font-semibold text-slate-900">Departures today</h2>
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-slate-900">Departures today</h2>
+            {departures.length > 0 && (
+              <Link href="/checkout" className="flex items-center gap-1 text-xs font-medium text-brand-700 hover:underline">
+                Go to Check-Out <ArrowRight className="h-3 w-3" />
+              </Link>
+            )}
+          </div>
           {departures.length === 0 ? (
             <p className="text-sm text-slate-400">No departures today.</p>
           ) : (
             <ul className="divide-y divide-slate-100">
               {departures.map((b) => (
-                <li key={b.id} className="flex items-center gap-1.5 py-2 text-sm text-slate-700">
-                  {b.guest.fullName}
-                  <GuestBadges guest={b.guest} />
+                <li key={b.id} className="flex items-center justify-between gap-2 py-2 text-sm">
+                  <span className="flex items-center gap-1.5 text-slate-700">
+                    {b.guest.fullName}
+                    <GuestBadges guest={b.guest} />
+                    <span className="text-slate-400">
+                      · Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+                    </span>
+                  </span>
+                  <Link href="/checkout" className="shrink-0 text-slate-400 hover:text-brand-700" title="Check out">
+                    <LogOut className="h-4 w-4" />
+                  </Link>
                 </li>
               ))}
             </ul>

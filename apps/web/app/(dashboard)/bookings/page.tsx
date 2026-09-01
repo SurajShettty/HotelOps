@@ -30,13 +30,19 @@ interface Booking {
   checkInDate: string;
   checkOutDate: string;
   guest: { fullName: string } & GuestBadgeInfo;
-  bookingRooms: { occupants: number; room: { id: string; roomNumber: string } }[];
+  bookingRooms: { occupants: number; rateApplied: string; room: { id: string; roomNumber: string } }[];
 }
 
 interface AvailableRoom {
   id: string;
   roomNumber: string;
-  roomType: { baseRate: string; baseOccupancy: number; maxOccupancy: number };
+  roomType: { id: string; baseRate: string; baseOccupancy: number; maxOccupancy: number };
+}
+
+interface RateQuote {
+  baseRate: number;
+  averageRate: number;
+  blended: boolean;
 }
 
 function BookingForm({
@@ -53,6 +59,7 @@ function BookingForm({
   const isEdit = !!initial;
   const originalRoomId = initial?.bookingRooms[0]?.room.id ?? null;
   const originalOccupants = initial?.bookingRooms[0]?.occupants ?? null;
+  const originalRate = initial?.bookingRooms[0]?.rateApplied ?? null;
 
   const [pickedGuest, setPickedGuest] = useState<PickedGuest | null>(null);
   const [checkIn, setCheckIn] = useState(initial?.checkInDate.slice(0, 10) ?? '');
@@ -64,6 +71,13 @@ function BookingForm({
   const [checkingAvailability, setCheckingAvailability] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // In edit mode, start "touched" so we don't silently overwrite an already
+  // -agreed rate with a pricing-rules suggestion the moment the form opens.
+  const [rate, setRate] = useState(originalRate ? String(Number(originalRate)) : '');
+  const [rateTouched, setRateTouched] = useState(isEdit);
+  const [rateQuote, setRateQuote] = useState<RateQuote | null>(null);
+  const [rateQuoteLoading, setRateQuoteLoading] = useState(false);
 
   const selectedRoom = availableRooms.find((r) => r.id === selectedRoomId) ?? null;
   const overCapacity = !!selectedRoom && Number(occupants) > selectedRoom.roomType.maxOccupancy;
@@ -86,9 +100,12 @@ function BookingForm({
             : originalRoomId && res.availableRooms.some((r) => r.id === originalRoomId)
               ? originalRoomId
               : (res.availableRooms[0]?.id ?? '');
-          if (!occupantsTouched) {
-            const room = res.availableRooms.find((r) => r.id === next);
-            if (room) setOccupants(String(originalOccupants ?? room.roomType.baseOccupancy));
+          const room = res.availableRooms.find((r) => r.id === next);
+          if (room) {
+            if (!occupantsTouched) setOccupants(String(originalOccupants ?? room.roomType.baseOccupancy));
+            // Instant fallback so the field isn't empty while the pricing-rules
+            // quote below is still in flight.
+            if (!rateTouched) setRate(String(Number(room.roomType.baseRate)));
           }
           return next;
         });
@@ -97,6 +114,31 @@ function BookingForm({
       .finally(() => setCheckingAvailability(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hotelId, checkIn, checkOut]);
+
+  // Suggest a rate from active pricing rules once dates and a room are
+  // picked. A stay only stores one flat rate, so this is the average across
+  // the nights — `blended` (surfaced below the field) flags when the nights
+  // actually priced differently.
+  useEffect(() => {
+    if (!hotelId || !checkIn || !checkOut || !selectedRoom) {
+      setRateQuote(null);
+      return;
+    }
+    setRateQuoteLoading(true);
+    const timer = setTimeout(() => {
+      apiFetch<RateQuote>(
+        `/pricing-rules/quote-range?hotelId=${hotelId}&roomTypeId=${selectedRoom.roomType.id}&checkIn=${checkIn}&checkOut=${checkOut}`,
+      )
+        .then((res) => {
+          setRateQuote(res);
+          if (!rateTouched) setRate(String(res.averageRate));
+        })
+        .catch(() => setRateQuote(null))
+        .finally(() => setRateQuoteLoading(false));
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hotelId, checkIn, checkOut, selectedRoom?.roomType.id]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -110,20 +152,23 @@ function BookingForm({
       if (occupantCount > room.roomType.maxOccupancy) {
         throw new ApiError(`This room sleeps a maximum of ${room.roomType.maxOccupancy}`, 400);
       }
+      const rateValue = Number(rate);
+      if (!rate || rateValue <= 0) throw new ApiError('Enter a nightly rate', 400);
 
       if (isEdit) {
         const roomOrOccupantsChanged = selectedRoomId !== originalRoomId || occupantCount !== originalOccupants;
+        const rateChanged = rate !== String(Number(originalRate ?? NaN));
         await apiFetch(`/bookings/${initial!.id}`, {
           method: 'PATCH',
           body: JSON.stringify({
             hotelId,
             checkInDate: checkIn,
             checkOutDate: checkOut,
-            // Only resend the room (and its current rate) if the room or occupant
-            // count actually changed, so we don't silently overwrite the guest's
-            // originally agreed rate.
-            ...(roomOrOccupantsChanged
-              ? { rooms: [{ roomId: room.id, rate: Number(room.roomType.baseRate), occupants: occupantCount }] }
+            // Only resend the room/rate if the room, occupant count, or rate
+            // actually changed, so we don't silently overwrite the guest's
+            // originally agreed rate with a since-changed pricing rule.
+            ...(roomOrOccupantsChanged || rateChanged
+              ? { rooms: [{ roomId: room.id, rate: rateValue, occupants: occupantCount }] }
               : {}),
           }),
         });
@@ -159,7 +204,7 @@ function BookingForm({
             guestId,
             checkInDate: checkIn,
             checkOutDate: checkOut,
-            rooms: [{ roomId: room.id, rate: Number(room.roomType.baseRate), occupants: occupantCount }],
+            rooms: [{ roomId: room.id, rate: rateValue, occupants: occupantCount }],
             source: 'DIRECT',
           }),
         });
@@ -194,7 +239,7 @@ function BookingForm({
             }}
           />
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
             <Label htmlFor="room">Room</Label>
             <Select
@@ -203,9 +248,12 @@ function BookingForm({
               value={selectedRoomId}
               onChange={(e) => {
                 setSelectedRoomId(e.target.value);
-                if (!occupantsTouched) {
-                  const room = availableRooms.find((r) => r.id === e.target.value);
-                  if (room) setOccupants(String(room.roomType.baseOccupancy));
+                const room = availableRooms.find((r) => r.id === e.target.value);
+                if (room) {
+                  if (!occupantsTouched) setOccupants(String(room.roomType.baseOccupancy));
+                  // Instant fallback; the pricing-rules quote effect refines
+                  // this moments later once it resolves for the new room.
+                  if (!rateTouched) setRate(String(Number(room.roomType.baseRate)));
                 }
               }}
             >
@@ -239,6 +287,29 @@ function BookingForm({
                   : `Sleeps up to ${selectedRoom.roomType.maxOccupancy}`}
               </p>
             )}
+          </div>
+          <div>
+            <Label htmlFor="rate">Rate/night</Label>
+            <Input
+              id="rate"
+              required
+              type="number"
+              min={0}
+              step="any"
+              value={rate}
+              onChange={(e) => {
+                setRateTouched(true);
+                setRate(e.target.value);
+              }}
+            />
+            {rateQuoteLoading ? (
+              <p className="mt-1 text-xs text-slate-400">Checking pricing rules…</p>
+            ) : rateQuote && (rateQuote.averageRate !== rateQuote.baseRate || rateQuote.blended) ? (
+              <p className="mt-1 text-xs text-slate-400">
+                Pricing rules suggest {rateQuote.averageRate}
+                {rateQuote.blended ? ' (varies by night — averaged)' : ''}
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="flex gap-2">

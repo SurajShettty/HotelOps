@@ -92,7 +92,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
+    <div className="flex h-screen overflow-hidden bg-slate-50">
       <aside className="flex w-64 shrink-0 flex-col border-r border-slate-200 bg-brand-950 text-brand-100">
         <div className="flex items-center gap-2 px-5 py-5 text-white">
           <Building2 className="h-5 w-5 text-gold-400" />

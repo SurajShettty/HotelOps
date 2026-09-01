@@ -19,7 +19,18 @@ export class HotelsController {
 
   @Roles('SUPER_ADMIN')
   @Post()
-  create(@Body() body: { name: string; timezone?: string; address?: Prisma.InputJsonValue }) {
+  create(
+    @Body()
+    body: {
+      name: string;
+      timezone?: string;
+      address?: Prisma.InputJsonValue;
+      checkInTime?: string;
+      checkOutTime?: string;
+      earlyCheckInFee?: number;
+      lateCheckOutFee?: number;
+    },
+  ) {
     return this.hotelsService.create(body);
   }
 
@@ -29,7 +40,16 @@ export class HotelsController {
   @Patch(':hotelId')
   update(
     @Param('hotelId') hotelId: string,
-    @Body() body: Partial<{ name: string; timezone: string; address: Prisma.InputJsonValue }>,
+    @Body()
+    body: Partial<{
+      name: string;
+      timezone: string;
+      address: Prisma.InputJsonValue;
+      checkInTime: string;
+      checkOutTime: string;
+      earlyCheckInFee: number;
+      lateCheckOutFee: number;
+    }>,
   ) {
     return this.hotelsService.update(hotelId, body);
   }

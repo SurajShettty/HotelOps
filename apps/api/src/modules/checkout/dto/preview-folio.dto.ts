@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsNumber, IsOptional, IsUUID, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsNumber, IsOptional, IsUUID, ValidateNested } from 'class-validator';
 import { LineItem } from './checkout.dto';
 
 export class PreviewFolioDto {
@@ -21,4 +21,10 @@ export class PreviewFolioDto {
   @IsOptional()
   @IsNumber()
   taxRatePercent?: number;
+
+  // Front desk can waive the hotel's configured late check-out fee. No effect
+  // if checkout isn't actually happening late, or the hotel has no fee set.
+  @IsOptional()
+  @IsBoolean()
+  waiveLateCheckOutFee?: boolean;
 }

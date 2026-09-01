@@ -1,6 +1,6 @@
 import { ConflictException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@hotelops/database';
-import { addDaysUtc, differenceInCalendarDays, todayUtcDateOnly } from '../../common/date.util';
+import { addDaysUtc, differenceInCalendarDays, localTimeHHmm, todayUtcDateOnly } from '../../common/date.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { CheckoutDto, LineItem } from './dto/checkout.dto';
 import { PreviewFolioDto } from './dto/preview-folio.dto';
@@ -22,6 +22,7 @@ export class CheckoutService {
     additionalCharges: LineItem[] = [],
     discounts: LineItem[] = [],
     taxRatePercent?: number,
+    waiveLateCheckOutFee = false,
   ) {
     const booking = await client.booking.findUnique({
       where: { id: bookingId },
@@ -50,7 +51,14 @@ export class CheckoutService {
     const chargesTotal = loggedChargesTotal + additionalCharges.reduce((sum, c) => sum + c.amount, 0);
     const discountTotal = discounts.reduce((sum, d) => sum + d.amount, 0);
 
-    const subtotal = roomSubtotal + chargesTotal - discountTotal;
+    // Late check-out fee: is *this moment* — the actual wall-clock time
+    // checkout is being processed, regardless of what actualCheckOut's date
+    // floor above works out to — past the hotel's standard check-out time?
+    const hotel = await client.hotel.findUniqueOrThrow({ where: { id: booking.hotelId } });
+    const lateCheckOutApplicable = localTimeHHmm(new Date(), hotel.timezone) > hotel.checkOutTime;
+    const lateCheckOutFee = lateCheckOutApplicable && !waiveLateCheckOutFee ? Number(hotel.lateCheckOutFee) : 0;
+
+    const subtotal = roomSubtotal + chargesTotal + lateCheckOutFee - discountTotal;
     const taxRate = taxRatePercent ?? DEFAULT_TAX_RATE_PERCENT;
     const taxTotal = Math.round(subtotal * (taxRate / 100) * 100) / 100;
     const grandTotal = Math.round((subtotal + taxTotal) * 100) / 100;
@@ -62,7 +70,23 @@ export class CheckoutService {
     const alreadyPaid = Number(alreadyPaidAgg._sum.amount ?? 0);
     const balanceDue = Math.max(0, Math.round((grandTotal - alreadyPaid) * 100) / 100);
 
-    return { booking, actualCheckOut, nights, roomSubtotal, chargesTotal, discountTotal, subtotal, taxRate, taxTotal, grandTotal, alreadyPaid, balanceDue };
+    return {
+      booking,
+      actualCheckOut,
+      nights,
+      roomSubtotal,
+      chargesTotal,
+      discountTotal,
+      lateCheckOutApplicable,
+      lateCheckOutFee,
+      lateCheckOutTime: hotel.checkOutTime,
+      subtotal,
+      taxRate,
+      taxTotal,
+      grandTotal,
+      alreadyPaid,
+      balanceDue,
+    };
   }
 
   async preview(dto: PreviewFolioDto) {
@@ -72,6 +96,7 @@ export class CheckoutService {
       dto.additionalCharges,
       dto.discounts,
       dto.taxRatePercent,
+      dto.waiveLateCheckOutFee,
     );
     return folio;
   }
@@ -84,6 +109,7 @@ export class CheckoutService {
         dto.additionalCharges,
         dto.discounts,
         dto.taxRatePercent,
+        dto.waiveLateCheckOutFee,
       );
 
       const paidSoFar = alreadyPaid + dto.paymentAmount;

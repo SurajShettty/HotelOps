@@ -1,13 +1,13 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { todayUtcDateOnly } from '../../common/date.util';
+import { todayUtcDateOnly, localTimeHHmm } from '../../common/date.util';
 import { CheckinDto } from './dto/checkin.dto';
 
 @Injectable()
 export class CheckinService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async checkin(dto: CheckinDto) {
+  async checkin(dto: CheckinDto, checkedInById: string) {
     return this.prisma.$transaction(async (tx) => {
       const booking = await tx.booking.findUnique({ where: { id: dto.bookingId } });
       if (!booking) throw new NotFoundException('Booking not found');
@@ -47,6 +47,23 @@ export class CheckinService {
       if (dto.depositAmount) {
         await tx.payment.create({
           data: { bookingId: dto.bookingId, amount: dto.depositAmount, method: 'CASH', type: 'CHARGE', reference: 'Check-in deposit' },
+        });
+      }
+
+      // Early check-in fee: is the moment this check-in is being performed
+      // (not the booked date, the actual wall-clock time) before the hotel's
+      // standard check-in time? Logged as a RoomCharge so it flows into the
+      // checkout folio the same way any other incidental does.
+      const hotel = await tx.hotel.findUniqueOrThrow({ where: { id: booking.hotelId } });
+      const isEarly = localTimeHHmm(new Date(), hotel.timezone) < hotel.checkInTime;
+      if (isEarly && Number(hotel.earlyCheckInFee) > 0 && !dto.waiveEarlyCheckInFee) {
+        await tx.roomCharge.create({
+          data: {
+            bookingId: dto.bookingId,
+            description: `Early check-in fee (before ${hotel.checkInTime})`,
+            amount: hotel.earlyCheckInFee,
+            addedById: checkedInById,
+          },
         });
       }
 

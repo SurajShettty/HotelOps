@@ -12,16 +12,19 @@ export class AvailabilityService {
    * Rooms in `hotelId` (optionally filtered by room type) with no overlapping
    * active booking and no overlapping room block for [checkIn, checkOut).
    */
-  async findAvailableRooms(params: {
-    hotelId: string;
-    checkIn: Date;
-    checkOut: Date;
-    roomTypeId?: string;
-    excludeBookingId?: string;
-  }) {
+  async findAvailableRooms(
+    params: {
+      hotelId: string;
+      checkIn: Date;
+      checkOut: Date;
+      roomTypeId?: string;
+      excludeBookingId?: string;
+    },
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
     const { hotelId, checkIn, checkOut, roomTypeId, excludeBookingId } = params;
 
-    return this.prisma.room.findMany({
+    return client.room.findMany({
       where: {
         hotelId,
         ...(roomTypeId ? { roomTypeId } : {}),
