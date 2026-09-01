@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bed, ChevronDown, Pencil, Plus, Receipt, Trash2 } from 'lucide-react';
+import { Bed, ChevronDown, LayoutGrid, List, Pencil, Plus, Receipt, Trash2 } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { AmenitiesEditor, AmenitiesList } from '@/components/ui/amenities';
+import { FloorMap } from '@/components/ui/floor-map';
 
 const STATUS_OPTIONS = [
   { value: '', label: 'All statuses' },
@@ -163,6 +164,7 @@ export default function RoomsPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
   const [floorFilter, setFloorFilter] = useState('');
+  const [view, setView] = useState<'list' | 'map'>('list');
 
   const [editingFloorId, setEditingFloorId] = useState<string | null>(null);
   const [editFloorValue, setEditFloorValue] = useState('');
@@ -300,11 +302,13 @@ export default function RoomsPage() {
 
         <span className="h-6 w-px shrink-0 bg-slate-200" />
 
-        <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="min-w-0 grow basis-32">
-          {STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </Select>
+        {view === 'list' && (
+          <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="min-w-0 grow basis-32">
+            {STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </Select>
+        )}
         <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="min-w-0 grow basis-32">
           <option value="">All room types</option>
           {roomTypes.map((t) => (
@@ -317,6 +321,34 @@ export default function RoomsPage() {
             <option key={f} value={f}>Floor {f}</option>
           ))}
         </Select>
+
+        <span className="h-6 w-px shrink-0 bg-slate-200" />
+
+        <div className="flex shrink-0 items-center gap-0.5 rounded-lg border border-slate-300 p-0.5">
+          <button
+            type="button"
+            title="List view"
+            onClick={() => setView('list')}
+            className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+              view === 'list' ? 'bg-brand-800 text-white' : 'text-slate-500 hover:bg-slate-100'
+            }`}
+          >
+            <List className="h-3.5 w-3.5" /> List
+          </button>
+          <button
+            type="button"
+            title="Floor map"
+            onClick={() => {
+              setView('map');
+              setStatusFilter('');
+            }}
+            className={`flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+              view === 'map' ? 'bg-brand-800 text-white' : 'text-slate-500 hover:bg-slate-100'
+            }`}
+          >
+            <LayoutGrid className="h-3.5 w-3.5" /> Floor Map
+          </button>
+        </div>
       </Card>
 
       {(showAddType || showAddRoom) && (
@@ -409,6 +441,8 @@ export default function RoomsPage() {
             title={statusFilter || typeFilter || floorFilter ? 'No rooms match these filters' : 'No rooms yet'}
             description={statusFilter || typeFilter || floorFilter ? 'Try a different filter.' : 'Add a room type, then add rooms to it above.'}
           />
+        ) : view === 'map' ? (
+          <FloorMap rooms={visibleRooms} hotelId={hotelId} />
         ) : (
           <Card className="overflow-hidden">
             <table className="w-full text-sm">
