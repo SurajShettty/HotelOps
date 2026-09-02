@@ -6,12 +6,6 @@ export function differenceInCalendarDays(later: Date, earlier: Date): number {
   return Math.round((laterUtc - earlierUtc) / MS_PER_DAY);
 }
 
-/** Today's date at UTC midnight — matches how `@db.Date` columns store/compare dates elsewhere in this codebase. */
-export function todayUtcDateOnly(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-}
-
 export function addDaysUtc(date: Date, days: number): Date {
   const copy = new Date(date);
   copy.setUTCDate(copy.getUTCDate() + days);
@@ -21,4 +15,32 @@ export function addDaysUtc(date: Date, days: number): Date {
 /** The wall-clock "HH:mm" for `date` in IANA zone `timeZone` — e.g. for comparing against a hotel's check-in/check-out policy time. */
 export function localTimeHHmm(date: Date, timeZone: string): string {
   return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+}
+
+/**
+ * Midnight (UTC-encoded, matching `@db.Date` columns) of whatever calendar
+ * date `date` falls on in `timeZone` — e.g. for deciding what "today" means
+ * for a hotel's business day rather than the server's own UTC date.
+ */
+export function startOfDayInTimeZone(date: Date, timeZone: string): Date {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return new Date(Date.UTC(get('year'), get('month') - 1, get('day')));
+}
+
+/** Right now's calendar date (UTC-encoded) in the hotel's own timezone — the business-day "today" for stamping checkInDate/checkOutDate/etc. */
+export function todayDateOnlyInTimeZone(timeZone: string): Date {
+  return startOfDayInTimeZone(new Date(), timeZone);
+}
+
+/** Midnight (UTC-encoded) of the 1st of whatever month `date` falls in, in `timeZone`. */
+export function startOfMonthInTimeZone(date: Date, timeZone: string): Date {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit' }).formatToParts(date);
+  const get = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  return new Date(Date.UTC(get('year'), get('month') - 1, 1));
 }

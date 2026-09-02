@@ -102,6 +102,8 @@ export function OccupancyHeatmap({ hotelId }: { hotelId: string }) {
         <div ref={gridRef} className="relative overflow-x-auto pb-1">
           <div className="flex gap-1.5">
             <div className="flex shrink-0 flex-col gap-1.5 pr-1">
+              {/* Matches the h-3.5 month-label row atop each week column, so day labels line up with their actual cells below. */}
+              <span className="block h-3.5" aria-hidden="true" />
               {DAY_LABELS.map((label, i) => (
                 <span key={i} className="flex h-6 w-6 items-center text-[10px] text-slate-400">
                   {label}

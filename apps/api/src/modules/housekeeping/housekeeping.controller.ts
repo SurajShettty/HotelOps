@@ -3,6 +3,7 @@ import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current
 import { Roles } from '../../common/decorators/roles.decorator';
 import { HousekeepingService } from './housekeeping.service';
 
+@Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST', 'HOUSEKEEPING')
 @Controller('housekeeping/tasks')
 export class HousekeepingController {
   constructor(private readonly housekeepingService: HousekeepingService) {}
@@ -12,6 +13,9 @@ export class HousekeepingController {
     return this.housekeepingService.findTasks(hotelId, status);
   }
 
+  // `hotelId` query param is read by RolesGuard for scoping only, same
+  // convention as PATCH /rooms/:id/floor — task update is keyed by task id
+  // and doesn't otherwise need it.
   @Patch(':id')
   updateTask(
     @Param('id') id: string,
@@ -28,6 +32,7 @@ export class HousekeepingController {
 export class HousekeepingFloorAssignmentsController {
   constructor(private readonly housekeepingService: HousekeepingService) {}
 
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'HOUSEKEEPING')
   @Get()
   list(@Query('hotelId') hotelId: string) {
     return this.housekeepingService.listFloorAssignments(hotelId);

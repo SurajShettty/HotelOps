@@ -6,6 +6,8 @@ import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { AmenitiesEditor, AmenitiesList, toAmenitiesList } from '@/components/ui/amenities';
+import { RequireRole } from '@/components/ui/require-role';
+import { NON_HOUSEKEEPING_ROLES } from '@/lib/roles';
 
 interface Hotel {
   id: string;
@@ -1155,6 +1157,7 @@ export default function SettingsPage() {
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
   return (
+    <RequireRole allowed={NON_HOUSEKEEPING_ROLES}>
     <div className="mx-auto max-w-3xl">
       <PageHeader title="Settings" subtitle="Configure this property." />
       {/* Single column, deliberately: these cards' content ranges from a two-field
@@ -1180,5 +1183,6 @@ export default function SettingsPage() {
         ))}
       </div>
     </div>
+    </RequireRole>
   );
 }

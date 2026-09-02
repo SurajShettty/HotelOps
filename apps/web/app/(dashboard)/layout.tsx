@@ -22,21 +22,26 @@ import {
 import { clearSession, getToken, getUser, StoredUser } from '@/lib/auth';
 import { apiFetch } from '@/lib/api';
 import { HotelProvider, useCurrentHotel } from '@/lib/hotel-context';
-import { canManage, roleAtHotel, useRoleGrants } from '@/lib/roles';
+import { canManage, hasAnyRole, HOUSEKEEPING_AREA_ROLES, NON_HOUSEKEEPING_ROLES, RECEPTIONIST_AREA_ROLES, roleAtHotel, useRoleGrants } from '@/lib/roles';
 import { NotificationsBell } from '@/components/ui/notifications-bell';
 
-const NAV_ITEMS = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/rooms', label: 'Rooms', icon: Bed },
-  { href: '/availability', label: 'Availability', icon: Search },
-  { href: '/bookings', label: 'Bookings', icon: CalendarRange },
-  { href: '/calendar', label: 'Calendar', icon: CalendarRange },
-  { href: '/guests', label: 'Guests', icon: Users },
-  { href: '/checkin', label: 'Check-In', icon: LogIn },
-  { href: '/checkout', label: 'Check-Out', icon: DoorOpen },
-  { href: '/housekeeping', label: 'Housekeeping', icon: Sparkles },
-  { href: '/reports', label: 'Reports', icon: BarChart3 },
-  { href: '/settings', label: 'Settings', icon: Settings },
+// `roles: null` means every role sees the item — matches endpoints left
+// open to all staff (see the API's @Roles(...) audit). Everything else
+// mirrors the corresponding controller's role set exactly. Housekeeping's
+// job is cleaning rooms, not front-desk/scheduling/finance/admin work, so
+// it's the one role scoped down across several items below.
+const NAV_ITEMS: { href: string; label: string; icon: typeof LayoutDashboard; roles: string[] | null }[] = [
+  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard, roles: NON_HOUSEKEEPING_ROLES },
+  { href: '/rooms', label: 'Rooms', icon: Bed, roles: null },
+  { href: '/availability', label: 'Availability', icon: Search, roles: NON_HOUSEKEEPING_ROLES },
+  { href: '/bookings', label: 'Bookings', icon: CalendarRange, roles: NON_HOUSEKEEPING_ROLES },
+  { href: '/calendar', label: 'Calendar', icon: CalendarRange, roles: NON_HOUSEKEEPING_ROLES },
+  { href: '/guests', label: 'Guests', icon: Users, roles: RECEPTIONIST_AREA_ROLES },
+  { href: '/checkin', label: 'Check-In', icon: LogIn, roles: RECEPTIONIST_AREA_ROLES },
+  { href: '/checkout', label: 'Check-Out', icon: DoorOpen, roles: RECEPTIONIST_AREA_ROLES },
+  { href: '/housekeeping', label: 'Housekeeping', icon: Sparkles, roles: HOUSEKEEPING_AREA_ROLES },
+  { href: '/reports', label: 'Reports', icon: BarChart3, roles: null },
+  { href: '/settings', label: 'Settings', icon: Settings, roles: NON_HOUSEKEEPING_ROLES },
 ];
 
 // Shown only to MANAGER/OWNER/SUPER_ADMIN — the first role-gated nav entry in the app.
@@ -65,7 +70,8 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const { hotelId, setHotelId, ready } = useCurrentHotel();
   const roleGrants = useRoleGrants();
   const myRole = roleAtHotel(roleGrants, hotelId);
-  const navItems = canManage(myRole) ? [...NAV_ITEMS, AUDIT_LOGS_ITEM] : NAV_ITEMS;
+  const visibleItems = NAV_ITEMS.filter((item) => !item.roles || hasAnyRole(myRole, item.roles));
+  const navItems = canManage(myRole) ? [...visibleItems, AUDIT_LOGS_ITEM] : visibleItems;
 
   useEffect(() => {
     if (!getToken()) {

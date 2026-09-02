@@ -40,6 +40,10 @@ export class RoomsController {
     return this.roomsService.create(body, user.id);
   }
 
+  // `hotelId` query param is read by RolesGuard for scoping only, same
+  // convention as PATCH /rooms/:id/floor — status update is keyed by room id
+  // and doesn't otherwise need it.
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST', 'HOUSEKEEPING')
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,

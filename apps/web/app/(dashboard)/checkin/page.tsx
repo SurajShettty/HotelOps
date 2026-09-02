@@ -4,10 +4,12 @@ import { useEffect, useState } from 'react';
 import { DoorOpen, LogIn, Search } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
-import { formatTime12h, localTimeHHmm } from '@/lib/format';
+import { formatTime12h, localTimeHHmm, todayInTimeZone } from '@/lib/format';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
+import { RequireRole } from '@/components/ui/require-role';
+import { RECEPTIONIST_AREA_ROLES } from '@/lib/roles';
 
 interface BookingRoom {
   id: string;
@@ -31,7 +33,7 @@ interface AvailableRoom {
 }
 
 export default function CheckinPage() {
-  const { hotelId, ready } = useCurrentHotel();
+  const { hotelId, ready, timezone } = useCurrentHotel();
   const [arrivals, setArrivals] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -61,7 +63,7 @@ export default function CheckinPage() {
     if (!hotelId) return;
     setLoading(true);
     apiFetch<{ items: Booking[] }>(`/bookings?hotelId=${hotelId}&status=CONFIRMED&pageSize=200`)
-      .then((res) => setArrivals(res.items))
+      .then((res) => setArrivals([...res.items].sort((a, b) => a.checkInDate.localeCompare(b.checkInDate))))
       .finally(() => setLoading(false));
   }
 
@@ -74,7 +76,7 @@ export default function CheckinPage() {
   // rooms" flows on the Check-Out and Extend Stay pages.
   useEffect(() => {
     if (!hotelId) return;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = todayInTimeZone(timezone);
     for (const b of arrivals) {
       if (b.bookingRooms.length !== 1) continue;
       const room = b.bookingRooms[0].room;
@@ -109,7 +111,7 @@ export default function CheckinPage() {
     try {
       const depositRaw = deposits[booking.id];
       const altRoomId = selectedAltRoom[booking.id];
-      await apiFetch('/checkin', {
+      await apiFetch(`/checkin?hotelId=${hotelId}`, {
         method: 'POST',
         body: JSON.stringify({
           bookingId: booking.id,
@@ -134,6 +136,7 @@ export default function CheckinPage() {
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
   return (
+    <RequireRole allowed={RECEPTIONIST_AREA_ROLES}>
     <div>
       <PageHeader
         title="Check-In"
@@ -281,5 +284,6 @@ export default function CheckinPage() {
         </div>
       )}
     </div>
+    </RequireRole>
   );
 }

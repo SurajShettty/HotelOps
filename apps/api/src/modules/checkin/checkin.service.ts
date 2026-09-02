@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
-import { todayUtcDateOnly, localTimeHHmm } from '../../common/date.util';
+import { todayDateOnlyInTimeZone, localTimeHHmm } from '../../common/date.util';
 import { AuditLogService } from '../audit-logs/audit-log.service';
 import { CheckinDto } from './dto/checkin.dto';
 
@@ -19,10 +19,13 @@ export class CheckinService {
         throw new ConflictException({ code: 'INVALID_STATE', message: `Booking must be CONFIRMED to check in, got ${booking.status}` });
       }
 
+      const hotel = await tx.hotel.findUniqueOrThrow({ where: { id: booking.hotelId } });
+
       // Check-in stamps the booking with the guest's *actual* arrival date —
       // early or late arrivals shift the booking's checkInDate to match, so
       // billing (nights, at checkout) reflects the real stay, not the plan.
-      const actualCheckIn = todayUtcDateOnly();
+      // "Actual" is the hotel's own local calendar date, not the server's UTC one.
+      const actualCheckIn = todayDateOnlyInTimeZone(hotel.timezone);
       let checkInDate = booking.checkInDate;
       if (actualCheckIn.getTime() !== booking.checkInDate.getTime()) {
         if (actualCheckIn >= booking.checkOutDate) {
@@ -40,7 +43,7 @@ export class CheckinService {
           include: { housekeepingTasks: { where: { status: { not: 'READY' } }, take: 1 } },
         });
         if (!room) throw new NotFoundException(`Room ${assignment.roomId} not found`);
-        if (room.status === 'DIRTY' || room.housekeepingTasks.length > 0) {
+        if (room.status === 'DIRTY' || room.status === 'OCCUPIED' || room.housekeepingTasks.length > 0) {
           throw new ConflictException({ code: 'ROOM_NOT_READY', message: `Room ${room.roomNumber} is not ready for check-in` });
         }
 
@@ -58,7 +61,6 @@ export class CheckinService {
       // (not the booked date, the actual wall-clock time) before the hotel's
       // standard check-in time? Logged as a RoomCharge so it flows into the
       // checkout folio the same way any other incidental does.
-      const hotel = await tx.hotel.findUniqueOrThrow({ where: { id: booking.hotelId } });
       const isEarly = localTimeHHmm(new Date(), hotel.timezone) < hotel.checkInTime;
       if (isEarly && Number(hotel.earlyCheckInFee) > 0 && !dto.waiveEarlyCheckInFee) {
         await tx.roomCharge.create({

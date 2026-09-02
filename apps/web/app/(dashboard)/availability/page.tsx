@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { BedDouble, CheckCircle2, Search } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
+import { todayInTimeZone } from '@/lib/format';
+import { RequireRole } from '@/components/ui/require-role';
+import { NON_HOUSEKEEPING_ROLES } from '@/lib/roles';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
 import { GuestPicker, PickedGuest } from '@/components/ui/guest-picker';
@@ -33,10 +36,6 @@ function addDaysIso(iso: string, n: number) {
   const d = new Date(iso);
   d.setDate(d.getDate() + n);
   return d.toISOString().slice(0, 10);
-}
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
 }
 
 function BookRoomModal({
@@ -201,12 +200,12 @@ function BookRoomModal({
 }
 
 export default function AvailabilityPage() {
-  const { hotelId, ready } = useCurrentHotel();
+  const { hotelId, ready, timezone } = useCurrentHotel();
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([]);
   const [allRooms, setAllRooms] = useState<Room[]>([]);
   const [roomTypeId, setRoomTypeId] = useState('');
-  const [checkIn, setCheckIn] = useState(todayIso());
-  const [checkOut, setCheckOut] = useState(addDaysIso(todayIso(), 1));
+  const [checkIn, setCheckIn] = useState(() => todayInTimeZone(timezone));
+  const [checkOut, setCheckOut] = useState(() => addDaysIso(todayInTimeZone(timezone), 1));
   const [availableRooms, setAvailableRooms] = useState<Room[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [bookingRoom, setBookingRoom] = useState<Room | null>(null);
@@ -249,6 +248,7 @@ export default function AvailabilityPage() {
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
   return (
+    <RequireRole allowed={NON_HOUSEKEEPING_ROLES}>
     <div>
       <PageHeader title="Availability" subtitle="Check what's free for a given date range — for phone and walk-in inquiries." />
 
@@ -336,5 +336,6 @@ export default function AvailabilityPage() {
         />
       )}
     </div>
+    </RequireRole>
   );
 }

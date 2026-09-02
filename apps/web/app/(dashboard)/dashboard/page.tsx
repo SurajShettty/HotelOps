@@ -21,11 +21,13 @@ import {
 } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
-import { formatTime12h } from '@/lib/format';
+import { formatTime12h, todayInTimeZone } from '@/lib/format';
 import { Button, Card, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 import { DashboardTrends } from '@/components/ui/dashboard-trends';
 import { OccupancyHeatmap } from '@/components/ui/occupancy-heatmap';
+import { RequireRole } from '@/components/ui/require-role';
+import { NON_HOUSEKEEPING_ROLES } from '@/lib/roles';
 
 interface Room {
   id: string;
@@ -43,11 +45,13 @@ interface Booking {
 }
 
 interface DashboardSummary {
-  revenue: { today: number; monthToDate: number };
+  // null for roles without finance visibility — the API omits the figures
+  // entirely rather than sending them for the client to hide.
+  revenue: { today: number; monthToDate: number } | null;
   today: { arrivals: number; departures: number };
   alerts: {
     roomsNotReadyForArrivals: { bookingId: string; guestName: string; roomNumber: string; roomStatus: string }[];
-    overdueHousekeeping: { taskId: string; roomNumber: string; status: string; minutesOpen: number }[];
+    overdueHousekeeping: { taskId: string; roomNumber: string; status: string; minutesOpen: number; assignedToName: string | null }[];
     roomsOutOfService: { roomId: string; roomNumber: string; reason: string }[];
     noShows: { bookingId: string; guestName: string; roomNumbers: string[]; checkInDate: string }[];
     overstays: { bookingId: string; guestName: string; roomNumbers: string[]; checkOutDate: string; checkOutTime: string; dueToday: boolean }[];
@@ -109,7 +113,7 @@ function CreateHotelForm() {
 }
 
 export default function DashboardPage() {
-  const { hotelId, ready } = useCurrentHotel();
+  const { hotelId, ready, timezone } = useCurrentHotel();
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -158,7 +162,7 @@ export default function DashboardPage() {
   async function handleMarkNoShow(bookingId: string) {
     if (!confirm('Mark this booking as a no-show?')) return;
     try {
-      await apiFetch(`/bookings/${bookingId}/no-show`, { method: 'POST' });
+      await apiFetch(`/bookings/${bookingId}/no-show?hotelId=${hotelId}`, { method: 'POST' });
       reload();
     } catch {
       // Non-fatal — the alert list below still reflects the server's true state on next reload.
@@ -173,7 +177,7 @@ export default function DashboardPage() {
     return <CreateHotelForm />;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInTimeZone(timezone);
   const arrivals = bookings.filter((b) => b.checkInDate.slice(0, 10) === today && b.status === 'CONFIRMED');
   const departures = bookings.filter((b) => b.checkOutDate.slice(0, 10) === today && b.status === 'CHECKED_IN');
   const occupied = rooms.filter((r) => r.status === 'OCCUPIED').length;
@@ -181,8 +185,14 @@ export default function DashboardPage() {
 
   const kpis = [
     { key: 'occupancy', label: 'Occupancy today', value: `${occupancyPct}%`, icon: PercentCircle, tint: 'bg-brand-50 text-brand-700' },
-    { key: 'revenueToday', label: 'Revenue today', value: summary ? money(summary.revenue.today) : '—', icon: Wallet, tint: 'bg-gold-50 text-gold-700', sensitive: true },
-    { key: 'revenueMtd', label: 'Revenue MTD', value: summary ? money(summary.revenue.monthToDate) : '—', icon: Wallet, tint: 'bg-gold-50 text-gold-700', sensitive: true },
+    // Omitted entirely (not just masked) for roles without finance
+    // visibility — the API never sends these figures to begin with.
+    ...(summary?.revenue
+      ? [
+          { key: 'revenueToday', label: 'Revenue today', value: money(summary.revenue.today), icon: Wallet, tint: 'bg-gold-50 text-gold-700', sensitive: true },
+          { key: 'revenueMtd', label: 'Revenue MTD', value: money(summary.revenue.monthToDate), icon: Wallet, tint: 'bg-gold-50 text-gold-700', sensitive: true },
+        ]
+      : []),
     { key: 'totalRooms', label: 'Total rooms', value: rooms.length, icon: BedDouble, tint: 'bg-violet-50 text-violet-700' },
     { key: 'arrivals', label: 'Arrivals today', value: summary ? summary.today.arrivals : '—', icon: LogIn, tint: 'bg-emerald-50 text-emerald-700' },
     { key: 'departures', label: 'Departures today', value: summary ? summary.today.departures : '—', icon: LogOut, tint: 'bg-sky-50 text-sky-700' },
@@ -198,6 +208,7 @@ export default function DashboardPage() {
     : 0;
 
   return (
+    <RequireRole allowed={NON_HOUSEKEEPING_ROLES}>
     <div>
       <PageHeader title="Dashboard" subtitle="Today's snapshot for this property." />
 
@@ -268,7 +279,9 @@ export default function DashboardPage() {
                     {alerts.overdueHousekeeping.map((t) => (
                       <li key={t.taskId} className="text-sm text-slate-700">
                         Room {t.roomNumber} — {t.status.toLowerCase().replace('_', ' ')}{' '}
-                        <span className="text-slate-400">({t.minutesOpen} min)</span>
+                        <span className="text-slate-400">
+                          ({t.minutesOpen} min{t.assignedToName ? ` · ${t.assignedToName}` : ' · unassigned'})
+                        </span>
                       </li>
                     ))}
                   </ul>
@@ -407,5 +420,6 @@ export default function DashboardPage() {
         </div>
       </div>
     </div>
+    </RequireRole>
   );
 }

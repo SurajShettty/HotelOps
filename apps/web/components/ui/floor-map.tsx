@@ -4,6 +4,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { BedDouble, CircleCheck, Clock3, Sparkles, Wrench } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
+import { useCurrentHotel } from '@/lib/hotel-context';
+import { todayInTimeZone } from '@/lib/format';
 import { Card } from './primitives';
 
 export interface FloorMapRoom {
@@ -82,10 +84,6 @@ const TILE_STYLES: Record<
 // Shown in this fixed order everywhere (legend, summary strip, floor bars) regardless of which states are actually present.
 const TILE_ORDER: TileState[] = ['AVAILABLE', 'OCCUPIED', 'RESERVED', 'MAINTENANCE', 'DIRTY'];
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 // Numeric-aware so floor "10" sorts after "2", not before — floors are almost
 // always numeric strings, and a plain string sort reads wrong for a visual map.
 function sortFloors(floors: string[]) {
@@ -156,6 +154,7 @@ function SummaryStrip({ counts, total }: { counts: Map<TileState, number>; total
  * the Calendar page and dashboard alerts already do.
  */
 export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: string }) {
+  const { timezone } = useCurrentHotel();
   const [reservedRoomIds, setReservedRoomIds] = useState<Set<string>>(new Set());
   const [blockedRoomIds, setBlockedRoomIds] = useState<Set<string>>(new Set());
   const [occupantByRoomId, setOccupantByRoomId] = useState<Map<string, string>>(new Map());
@@ -178,7 +177,7 @@ export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: s
     ])
       .then(([confirmed, checkedIn, blocksPerRoom]) => {
         if (cancelled) return;
-        const today = todayIso();
+        const today = todayInTimeZone(timezone);
 
         const reserved = new Set<string>();
         for (const b of confirmed.items) {

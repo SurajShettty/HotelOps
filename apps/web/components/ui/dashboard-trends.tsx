@@ -7,7 +7,8 @@ import { Card } from '@/components/ui/primitives';
 
 interface TrendDay {
   date: string;
-  revenue: number;
+  // null for roles without finance visibility — the API omits the figures entirely.
+  revenue: number | null;
   occupancyPct: number;
 }
 
@@ -53,7 +54,8 @@ export function DashboardTrends({ hotelId }: { hotelId: string }) {
   }, [hotelId, rangeDays]);
 
   const chartDays = (data?.days ?? []).map((d) => ({ ...d, label: formatShortDate(d.date) }));
-  const totalRevenue = chartDays.reduce((sum, d) => sum + d.revenue, 0);
+  const hasRevenue = chartDays.some((d) => d.revenue !== null);
+  const totalRevenue = chartDays.reduce((sum, d) => sum + (d.revenue ?? 0), 0);
   const avgOccupancy = chartDays.length ? Math.round(chartDays.reduce((sum, d) => sum + d.occupancyPct, 0) / chartDays.length) : 0;
 
   const sourceRows = SOURCE_ORDER.map((source) => ({
@@ -89,34 +91,36 @@ export function DashboardTrends({ hotelId }: { hotelId: string }) {
       {loading ? (
         <p className="text-sm text-slate-400">Loading…</p>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-3">
-          <div>
-            <div className="mb-1 flex items-baseline gap-2">
-              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Revenue</span>
-              <span className="text-sm font-semibold text-slate-900">{money(totalRevenue)}</span>
+        <div className={`grid gap-6 ${hasRevenue ? 'lg:grid-cols-3' : 'lg:grid-cols-2'}`}>
+          {hasRevenue && (
+            <div>
+              <div className="mb-1 flex items-baseline gap-2">
+                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Revenue</span>
+                <span className="text-sm font-semibold text-slate-900">{money(totalRevenue)}</span>
+              </div>
+              <ResponsiveContainer width="100%" height={140}>
+                <AreaChart data={chartDays} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="dashboardRevenueFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#2b4b96" stopOpacity={0.25} />
+                      <stop offset="100%" stopColor="#2b4b96" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid vertical={false} stroke="#e1e0d9" />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 10, fill: '#898781' }}
+                    axisLine={{ stroke: '#c3c2b7' }}
+                    tickLine={false}
+                    interval={rangeDays === 30 ? 4 : 0}
+                  />
+                  <YAxis width={34} tick={{ fontSize: 10, fill: '#898781' }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<ChartTooltip formatter={money} />} />
+                  <Area type="monotone" dataKey="revenue" stroke="#2b4b96" strokeWidth={2} fill="url(#dashboardRevenueFill)" activeDot={{ r: 4 }} />
+                </AreaChart>
+              </ResponsiveContainer>
             </div>
-            <ResponsiveContainer width="100%" height={140}>
-              <AreaChart data={chartDays} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="dashboardRevenueFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#2b4b96" stopOpacity={0.25} />
-                    <stop offset="100%" stopColor="#2b4b96" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid vertical={false} stroke="#e1e0d9" />
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 10, fill: '#898781' }}
-                  axisLine={{ stroke: '#c3c2b7' }}
-                  tickLine={false}
-                  interval={rangeDays === 30 ? 4 : 0}
-                />
-                <YAxis width={34} tick={{ fontSize: 10, fill: '#898781' }} axisLine={false} tickLine={false} />
-                <Tooltip content={<ChartTooltip formatter={money} />} />
-                <Area type="monotone" dataKey="revenue" stroke="#2b4b96" strokeWidth={2} fill="url(#dashboardRevenueFill)" activeDot={{ r: 4 }} />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
+          )}
 
           <div>
             <div className="mb-1 flex items-baseline gap-2">

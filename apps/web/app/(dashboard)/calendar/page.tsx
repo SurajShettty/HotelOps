@@ -9,6 +9,8 @@ import { Button, Card, ErrorBanner, Input, Label, PageHeader, Select } from '@/c
 import { StatusBadge } from '@/components/ui/status-badge';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 import { GuestPicker, PickedGuest } from '@/components/ui/guest-picker';
+import { RequireRole } from '@/components/ui/require-role';
+import { NON_HOUSEKEEPING_ROLES } from '@/lib/roles';
 
 const DAYS_SHOWN = 14;
 
@@ -318,7 +320,7 @@ function ReserveOrCheckinForm({
       });
 
       if (mode === 'checkin') {
-        await apiFetch('/checkin', {
+        await apiFetch(`/checkin?hotelId=${hotelId}`, {
           method: 'POST',
           body: JSON.stringify({
             bookingId: booking.id,
@@ -515,7 +517,7 @@ function CellActionPopover({
     setError(null);
     try {
       if (info.kind === 'booking') {
-        await apiFetch(`/bookings/${info.id}/cancel`, { method: 'POST' });
+        await apiFetch(`/bookings/${info.id}/cancel?hotelId=${hotelId}`, { method: 'POST' });
       } else {
         await apiFetch(`/rooms/block/${info.id}?hotelId=${hotelId}`, { method: 'DELETE' });
       }
@@ -840,6 +842,7 @@ export default function CalendarPage() {
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
   return (
+    <RequireRole allowed={NON_HOUSEKEEPING_ROLES}>
     <div>
       <PageHeader
         title="Availability Calendar"
@@ -1003,5 +1006,6 @@ export default function CalendarPage() {
         </Card>
       )}
     </div>
+    </RequireRole>
   );
 }

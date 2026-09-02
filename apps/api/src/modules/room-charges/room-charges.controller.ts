@@ -1,8 +1,13 @@
 import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
 import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { RoomChargesService } from './room-charges.service';
 import { CreateRoomChargeDto } from './dto/create-room-charge.dto';
 
+// `hotelId` query param on these routes is read by RolesGuard for scoping
+// only, same convention as PATCH /rooms/:id/floor — room charges are keyed
+// by bookingId/roomId and don't otherwise need it.
+@Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST', 'HOUSEKEEPING')
 @Controller('room-charges')
 export class RoomChargesController {
   constructor(private readonly roomChargesService: RoomChargesService) {}

@@ -68,11 +68,16 @@ export class BookingsController {
     return this.bookingsService.changeRoom(id, dto, user.id);
   }
 
+  // `hotelId` query param is read by RolesGuard for scoping only, same
+  // convention as PATCH /rooms/:id/floor — cancel/no-show look the booking
+  // up by id and don't otherwise need it.
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
   @Post(':id/cancel')
   cancel(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
     return this.bookingsService.cancel(id, user.id);
   }
 
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
   @Post(':id/no-show')
   noShow(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
     return this.bookingsService.noShow(id, user.id);

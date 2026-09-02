@@ -1,6 +1,6 @@
 import { ConflictException, HttpException, HttpStatus, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@hotelops/database';
-import { addDaysUtc, differenceInCalendarDays, localTimeHHmm, todayUtcDateOnly } from '../../common/date.util';
+import { addDaysUtc, differenceInCalendarDays, localTimeHHmm, todayDateOnlyInTimeZone } from '../../common/date.util';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogService } from '../audit-logs/audit-log.service';
 import { HousekeepingService } from '../housekeeping/housekeeping.service';
@@ -39,10 +39,13 @@ export class CheckoutService {
       throw new ConflictException({ code: 'INVALID_STATE', message: `Booking must be CHECKED_IN to check out, got ${booking.status}` });
     }
 
+    const hotel = await client.hotel.findUniqueOrThrow({ where: { id: booking.hotelId } });
+
     // Checkout stamps the *actual* departure date — a guest who stays past
     // the originally booked checkOutDate is billed for the real nights, not
     // just the plan. Floor at one night even for a same-day departure.
-    const today = todayUtcDateOnly();
+    // "Actual" is the hotel's own local calendar date, not the server's UTC one.
+    const today = todayDateOnlyInTimeZone(hotel.timezone);
     const minCheckOut = addDaysUtc(booking.checkInDate, 1);
     const actualCheckOut = today > minCheckOut ? today : minCheckOut;
 
@@ -90,7 +93,6 @@ export class CheckoutService {
     // Late check-out fee: is *this moment* — the actual wall-clock time
     // checkout is being processed, regardless of what actualCheckOut's date
     // floor above works out to — past the hotel's standard check-out time?
-    const hotel = await client.hotel.findUniqueOrThrow({ where: { id: booking.hotelId } });
     const lateCheckOutApplicable = localTimeHHmm(new Date(), hotel.timezone) > hotel.checkOutTime;
     const lateCheckOutFee = lateCheckOutApplicable && !waiveLateCheckOutFee ? Number(hotel.lateCheckOutFee) : 0;
 

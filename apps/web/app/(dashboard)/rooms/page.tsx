@@ -56,6 +56,7 @@ interface Anchor {
  * checkout folio automatically (see CheckoutService.computeFolio).
  */
 function RoomChargesPopover({ room, anchor, onClose }: { room: Room; anchor: Anchor; onClose: () => void }) {
+  const { hotelId } = useCurrentHotel();
   const [charges, setCharges] = useState<RoomCharge[]>([]);
   const [loading, setLoading] = useState(true);
   const [description, setDescription] = useState('');
@@ -65,7 +66,7 @@ function RoomChargesPopover({ room, anchor, onClose }: { room: Room; anchor: Anc
 
   function reload() {
     setLoading(true);
-    apiFetch<RoomCharge[]>(`/room-charges?roomId=${room.id}`)
+    apiFetch<RoomCharge[]>(`/room-charges?roomId=${room.id}&hotelId=${hotelId}`)
       .then(setCharges)
       .catch(() => setCharges([]))
       .finally(() => setLoading(false));
@@ -79,7 +80,7 @@ function RoomChargesPopover({ room, anchor, onClose }: { room: Room; anchor: Anc
     setSubmitting(true);
     setError(null);
     try {
-      await apiFetch('/room-charges', {
+      await apiFetch(`/room-charges?hotelId=${hotelId}`, {
         method: 'POST',
         body: JSON.stringify({ roomId: room.id, description: description.trim(), amount: Number(amount) }),
       });
@@ -95,7 +96,7 @@ function RoomChargesPopover({ room, anchor, onClose }: { room: Room; anchor: Anc
 
   async function handleDelete(id: string) {
     try {
-      await apiFetch(`/room-charges/${id}`, { method: 'DELETE' });
+      await apiFetch(`/room-charges/${id}?hotelId=${hotelId}`, { method: 'DELETE' });
       reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to remove charge');

@@ -9,6 +9,8 @@ import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader } from 
 import { Pagination } from '@/components/ui/pagination';
 import { GuestLoyaltyBadge, GuestLoyaltyTier } from '@/components/ui/guest-loyalty-badge';
 import { GuestFlagBadge } from '@/components/ui/guest-flag-badge';
+import { RequireRole } from '@/components/ui/require-role';
+import { RECEPTIONIST_AREA_ROLES } from '@/lib/roles';
 
 const PAGE_SIZE = 25;
 
@@ -91,6 +93,7 @@ export default function GuestsPage() {
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
   return (
+    <RequireRole allowed={RECEPTIONIST_AREA_ROLES}>
     <div>
       <PageHeader
         title="Guests"
@@ -181,5 +184,6 @@ export default function GuestsPage() {
         </Card>
       )}
     </div>
+    </RequireRole>
   );
 }

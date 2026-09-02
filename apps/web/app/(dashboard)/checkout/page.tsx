@@ -4,10 +4,12 @@ import { useEffect, useState } from 'react';
 import { CalendarPlus, Download, DoorOpen, Plus, Search, Trash2 } from 'lucide-react';
 import { apiFetch, ApiError, downloadFile } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
-import { formatTime12h } from '@/lib/format';
+import { formatTime12h, todayInTimeZone } from '@/lib/format';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, Select } from '@/components/ui/primitives';
 import { PageHeader } from '@/components/ui/primitives';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
+import { RequireRole } from '@/components/ui/require-role';
+import { RECEPTIONIST_AREA_ROLES } from '@/lib/roles';
 
 interface Booking {
   id: string;
@@ -152,6 +154,7 @@ function FolioSummary({
 }
 
 function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }) {
+  const { hotelId } = useCurrentHotel();
   const [charges, setCharges] = useState<LineItem[]>([]);
   const [discounts, setDiscounts] = useState<LineItem[]>([]);
   const [paymentMethod, setPaymentMethod] = useState('CASH');
@@ -173,7 +176,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
   const [loggedChargesVersion, setLoggedChargesVersion] = useState(0);
 
   useEffect(() => {
-    apiFetch<RoomCharge[]>(`/room-charges?bookingId=${booking.id}`)
+    apiFetch<RoomCharge[]>(`/room-charges?bookingId=${booking.id}&hotelId=${hotelId}`)
       .then(setLoggedCharges)
       .catch(() => setLoggedCharges([]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -181,7 +184,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
 
   async function handleRemoveLoggedCharge(id: string) {
     try {
-      await apiFetch(`/room-charges/${id}`, { method: 'DELETE' });
+      await apiFetch(`/room-charges/${id}?hotelId=${hotelId}`, { method: 'DELETE' });
       setLoggedChargesVersion((v) => v + 1);
     } catch {
       // Non-fatal — the folio preview below still reflects the server's true state either way.
@@ -200,7 +203,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
   useEffect(() => {
     setPreviewLoading(true);
     const timer = setTimeout(() => {
-      apiFetch<Folio>('/checkout/preview', {
+      apiFetch<Folio>(`/checkout/preview?hotelId=${hotelId}`, {
         method: 'POST',
         body: JSON.stringify({
           bookingId: booking.id,
@@ -225,7 +228,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
     setError(null);
     setSubmitting(true);
     try {
-      const invoice = await apiFetch<{ id: string; grandTotal: string }>('/checkout', {
+      const invoice = await apiFetch<{ id: string; grandTotal: string }>(`/checkout?hotelId=${hotelId}`, {
         method: 'POST',
         body: JSON.stringify({
           bookingId: booking.id,
@@ -248,7 +251,7 @@ function FolioForm({ booking, onDone }: { booking: Booking; onDone: () => void }
     if (!result) return;
     setDownloading(true);
     try {
-      await downloadFile(`/invoices/${result.id}/pdf`, `invoice-${result.id.slice(0, 8)}.pdf`);
+      await downloadFile(`/invoices/${result.id}/pdf?hotelId=${hotelId}`, `invoice-${result.id.slice(0, 8)}.pdf`);
     } catch {
       setError('Failed to download invoice');
     } finally {
@@ -557,7 +560,7 @@ function ExtendStayForm({ hotelId, booking, onDone, onCancel }: { hotelId: strin
 }
 
 export default function CheckoutPage() {
-  const { hotelId, ready } = useCurrentHotel();
+  const { hotelId, ready, timezone } = useCurrentHotel();
   const [stays, setStays] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -569,7 +572,7 @@ export default function CheckoutPage() {
     if (!hotelId) return;
     setLoading(true);
     apiFetch<{ items: Booking[] }>(`/bookings?hotelId=${hotelId}&status=CHECKED_IN&pageSize=200`)
-      .then((res) => setStays(res.items))
+      .then((res) => setStays([...res.items].sort((a, b) => a.checkOutDate.localeCompare(b.checkOutDate))))
       .finally(() => setLoading(false));
   }
 
@@ -593,6 +596,7 @@ export default function CheckoutPage() {
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
   return (
+    <RequireRole allowed={RECEPTIONIST_AREA_ROLES}>
     <div>
       <PageHeader
         title="Check-Out"
@@ -622,7 +626,7 @@ export default function CheckoutPage() {
       ) : (
         <div className="space-y-3">
           {visibleStays.map((b) => {
-            const departingToday = b.checkOutDate.slice(0, 10) === new Date().toISOString().slice(0, 10);
+            const departingToday = b.checkOutDate.slice(0, 10) === todayInTimeZone(timezone);
             return (
               <div key={b.id}>
                 <Card className="flex flex-wrap items-center justify-between gap-4 p-5">
@@ -684,5 +688,6 @@ export default function CheckoutPage() {
         </div>
       )}
     </div>
+    </RequireRole>
   );
 }

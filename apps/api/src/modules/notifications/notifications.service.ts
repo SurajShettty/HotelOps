@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
+import { startOfDayInTimeZone } from '../../common/date.util';
 import { GUEST_LOYALTY_INCLUDE, getGuestLoyaltyTier } from '../guests/guest-loyalty';
 
 // How far back a just-created booking still counts as a fresh "confirmation" notification.
@@ -42,10 +43,6 @@ export interface NotificationItem {
   stats?: { label: string; value: string }[];
 }
 
-function startOfDay(d: Date) {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
-
 function formatInr(amount: number): string {
   if (amount >= 100000) return `₹${(amount / 100000).toFixed(1)} Lakh${amount >= 200000 ? 's' : ''}`;
   return `₹${Math.round(amount).toLocaleString('en-IN')}`;
@@ -61,9 +58,12 @@ export class NotificationsService {
    * separate write path to keep in sync, and it mirrors how DashboardService
    * already computes its alert lists on read.
    */
-  async getForHotel(hotelId: string) {
+  async getForHotel(hotelId: string, includeRevenue: boolean) {
     const now = new Date();
-    const todayStart = startOfDay(now);
+    const hotel = await this.prisma.hotel.findUniqueOrThrow({ where: { id: hotelId } });
+    // "Today" is the hotel's own local calendar day, per its timezone
+    // setting, not the server's UTC date.
+    const todayStart = startOfDayInTimeZone(now, hotel.timezone);
     const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
     const horizonEnd = new Date(todayStart.getTime() + 2 * 24 * 60 * 60 * 1000); // today + tomorrow
     const confirmationSince = new Date(now.getTime() - CONFIRMATION_WINDOW_HOURS * 60 * 60 * 1000);
@@ -83,7 +83,7 @@ export class NotificationsService {
       this.getMaintenanceAlerts(hotelId, now),
       this.getBlockedTooLong(hotelId, now),
       this.getUnbookedTooLong(hotelId, now),
-      this.getDailyBriefing(hotelId, todayStart, tomorrowStart),
+      this.getDailyBriefing(hotelId, todayStart, tomorrowStart, includeRevenue),
     ]);
 
     // The briefing is pinned to the top rather than sorted by timestamp —
@@ -117,7 +117,7 @@ export class NotificationsService {
    * date-stamped, so it's the same notification on every poll until midnight
    * rolls it over to a new one) — a snapshot of the day's key numbers.
    */
-  private async getDailyBriefing(hotelId: string, todayStart: Date, tomorrowStart: Date): Promise<NotificationItem> {
+  private async getDailyBriefing(hotelId: string, todayStart: Date, tomorrowStart: Date, includeRevenue: boolean): Promise<NotificationItem> {
     const [totalRooms, activeToday, checkIns, checkOuts, outOfOrderRooms, maintenanceBlocks, todaysArrivals, pendingHousekeeping] =
       await Promise.all([
         this.prisma.room.count({ where: { hotelId } }),
@@ -149,7 +149,7 @@ export class NotificationsService {
     for (const booking of activeToday) {
       for (const br of booking.bookingRooms) {
         occupiedRoomIds.add(br.roomId);
-        expectedRevenue += Number(br.rateApplied);
+        if (includeRevenue) expectedRevenue += Number(br.rateApplied);
       }
     }
     const occupancyPct = totalRooms > 0 ? Math.round((occupiedRoomIds.size / totalRooms) * 100) : 0;
@@ -173,7 +173,9 @@ export class NotificationsService {
         { label: 'Rooms Under Maintenance', value: String(roomsUnderMaintenance) },
         { label: 'VIP Arrivals', value: String(vipArrivals) },
         { label: 'Pending Housekeeping', value: String(pendingHousekeeping) },
-        { label: 'Expected Revenue', value: formatInr(expectedRevenue) },
+        // Omitted entirely (not just masked) for roles without finance
+        // visibility — same policy as the dashboard's revenue KPI.
+        ...(includeRevenue ? [{ label: 'Expected Revenue', value: formatInr(expectedRevenue) }] : []),
       ],
     };
   }

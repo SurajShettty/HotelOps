@@ -40,6 +40,12 @@ export class RoomsService {
 
   async updateStatus(id: string, status: 'AVAILABLE' | 'OCCUPIED' | 'DIRTY' | 'OUT_OF_ORDER', actorId: string) {
     const before = await this.prisma.room.findUniqueOrThrow({ where: { id } });
+    if (status === 'OCCUPIED' && !(await this.hasActiveOccupant(id))) {
+      throw new BadRequestException({
+        code: 'NO_ACTIVE_BOOKING',
+        message: 'Cannot mark a room occupied without a checked-in booking. Use check-in instead.',
+      });
+    }
     const after = await this.prisma.room.update({ where: { id }, data: { status } });
     const diff = fieldDiff(before, after, ['status'] as const);
     await this.auditLog.record(this.prisma, {
@@ -81,6 +87,18 @@ export class RoomsService {
 
   /** Revert of Room STATUS_CHANGE/FLOOR_CHANGE — reapplies a stored field snapshot without re-logging. */
   async restoreFields(id: string, fields: Record<string, unknown>) {
+    if (fields.status === 'OCCUPIED' && !(await this.hasActiveOccupant(id))) {
+      throw new BadRequestException({
+        code: 'NOT_REVERTIBLE',
+        message: 'Cannot revert to OCCUPIED: this room no longer has a checked-in booking.',
+      });
+    }
     await this.prisma.room.update({ where: { id }, data: fields as Prisma.RoomUpdateInput });
+  }
+
+  /** True if some CHECKED_IN booking currently occupies this room. */
+  private async hasActiveOccupant(roomId: string): Promise<boolean> {
+    const count = await this.prisma.bookingRoom.count({ where: { roomId, booking: { status: 'CHECKED_IN' } } });
+    return count > 0;
   }
 }

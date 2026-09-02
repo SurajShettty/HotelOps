@@ -5,6 +5,8 @@ import { ArrowRight, ChevronDown, Sparkles, UserRound } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Card, ErrorBanner, PageHeader } from '@/components/ui/primitives';
+import { RequireRole } from '@/components/ui/require-role';
+import { HOUSEKEEPING_AREA_ROLES } from '@/lib/roles';
 
 function initials(name: string) {
   return name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
@@ -67,7 +69,7 @@ export default function HousekeepingPage() {
     setError(null);
     setMovingId(task.id);
     try {
-      await apiFetch(`/housekeeping/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ status: next }) });
+      await apiFetch(`/housekeeping/tasks/${task.id}?hotelId=${hotelId}`, { method: 'PATCH', body: JSON.stringify({ status: next }) });
       reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to update task');
@@ -80,7 +82,7 @@ export default function HousekeepingPage() {
     setError(null);
     setAssigningId(task.id);
     try {
-      await apiFetch(`/housekeeping/tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify({ assignedToId: userId || null }) });
+      await apiFetch(`/housekeeping/tasks/${task.id}?hotelId=${hotelId}`, { method: 'PATCH', body: JSON.stringify({ assignedToId: userId || null }) });
       reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to assign staff');
@@ -93,6 +95,7 @@ export default function HousekeepingPage() {
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
   return (
+    <RequireRole allowed={HOUSEKEEPING_AREA_ROLES}>
     <div>
       <PageHeader title="Housekeeping" subtitle="Room readiness, from dirty to ready for check-in." />
       {error && <div className="mb-4"><ErrorBanner>{error}</ErrorBanner></div>}
@@ -176,5 +179,6 @@ export default function HousekeepingPage() {
         </div>
       )}
     </div>
+    </RequireRole>
   );
 }

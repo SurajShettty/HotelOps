@@ -1,28 +1,31 @@
 import { Injectable } from '@nestjs/common';
+import { Hotel } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
-import { localTimeHHmm } from '../../common/date.util';
+import { localTimeHHmm, startOfDayInTimeZone, startOfMonthInTimeZone } from '../../common/date.util';
 
 // Matches the PRD's housekeeping-turnaround KPI (dirty -> ready in < 45 min
 // average) — a task open longer than that is worth flagging to an owner.
 const OVERDUE_HOUSEKEEPING_MINUTES = 45;
 
-function startOfDay(d: Date) {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-}
-
-function startOfMonth(d: Date) {
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-}
-
 @Injectable()
 export class DashboardService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getSummary(hotelId: string) {
+  /**
+   * `includeRevenue` gates the financial figures (revenue.today/monthToDate)
+   * to callers the controller has confirmed hold a finance-visible role for
+   * this hotel — everyone else gets `revenue: null` and the underlying
+   * Payment aggregates aren't even queried, so the numbers never leave the
+   * database for a caller who shouldn't see them.
+   */
+  async getSummary(hotelId: string, includeRevenue: boolean) {
     const now = new Date();
-    const todayStart = startOfDay(now);
+    const hotel = await this.prisma.hotel.findUniqueOrThrow({ where: { id: hotelId } });
+    // "Today"/"this month" are the hotel's own local calendar day/month, per
+    // its timezone setting — not the server's UTC date.
+    const todayStart = startOfDayInTimeZone(now, hotel.timezone);
     const tomorrowStart = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
-    const monthStart = startOfMonth(now);
+    const monthStart = startOfMonthInTimeZone(now, hotel.timezone);
 
     const [
       revenueToday,
@@ -35,19 +38,19 @@ export class DashboardService {
       arrivalsToday,
       departuresToday,
     ] = await Promise.all([
-      this.netRevenue(hotelId, todayStart, tomorrowStart),
-      this.netRevenue(hotelId, monthStart, tomorrowStart),
+      includeRevenue ? this.netRevenue(hotelId, todayStart, tomorrowStart) : Promise.resolve(null),
+      includeRevenue ? this.netRevenue(hotelId, monthStart, tomorrowStart) : Promise.resolve(null),
       this.getRoomsNotReadyForArrivals(hotelId, todayStart, tomorrowStart),
       this.getOverdueHousekeeping(hotelId, now),
       this.getRoomsOutOfService(hotelId, now),
       this.getNoShows(hotelId, todayStart),
-      this.getOverstays(hotelId, now, todayStart, tomorrowStart),
+      this.getOverstays(hotel, now, todayStart, tomorrowStart),
       this.getArrivalsCompletedToday(hotelId, todayStart, tomorrowStart),
       this.getDeparturesCompletedToday(hotelId, todayStart, tomorrowStart),
     ]);
 
     return {
-      revenue: { today: revenueToday, monthToDate: revenueMonthToDate },
+      revenue: includeRevenue ? { today: revenueToday, monthToDate: revenueMonthToDate } : null,
       today: { arrivals: arrivalsToday, departures: departuresToday },
       alerts: { roomsNotReadyForArrivals, overdueHousekeeping, roomsOutOfService, noShows, overstays },
     };
@@ -98,7 +101,7 @@ export class DashboardService {
     const cutoff = new Date(now.getTime() - OVERDUE_HOUSEKEEPING_MINUTES * 60 * 1000);
     const tasks = await this.prisma.housekeepingTask.findMany({
       where: { room: { hotelId }, status: { not: 'READY' }, createdAt: { lt: cutoff } },
-      include: { room: true },
+      include: { room: true, assignedTo: true },
       orderBy: { createdAt: 'asc' },
     });
 
@@ -107,6 +110,7 @@ export class DashboardService {
       roomNumber: task.room.roomNumber,
       status: task.status,
       minutesOpen: Math.round((now.getTime() - task.createdAt.getTime()) / 60000),
+      assignedToName: task.assignedTo?.fullName ?? null,
     }));
   }
 
@@ -153,13 +157,12 @@ export class DashboardService {
   // passed (a guest checking out later this afternoon isn't late yet). Same
   // "is it late right now" check as the late-check-out fee at actual checkout
   // (CheckoutService.computeFolio) — this just surfaces it proactively.
-  private async getOverstays(hotelId: string, now: Date, todayStart: Date, tomorrowStart: Date) {
-    const hotel = await this.prisma.hotel.findUniqueOrThrow({ where: { id: hotelId } });
+  private async getOverstays(hotel: Hotel, now: Date, todayStart: Date, tomorrowStart: Date) {
     const pastCheckOutTimeToday = localTimeHHmm(now, hotel.timezone) > hotel.checkOutTime;
     const cutoff = pastCheckOutTimeToday ? tomorrowStart : todayStart;
 
     const bookings = await this.prisma.booking.findMany({
-      where: { hotelId, status: 'CHECKED_IN', checkOutDate: { lt: cutoff } },
+      where: { hotelId: hotel.id, status: 'CHECKED_IN', checkOutDate: { lt: cutoff } },
       include: { guest: true, bookingRooms: { include: { room: true } } },
       orderBy: { checkOutDate: 'asc' },
     });
@@ -174,10 +177,11 @@ export class DashboardService {
     }));
   }
 
-  // Arrivals *completed* today — checkInDate is stamped with the actual
-  // arrival date at check-in (see CheckinService), so this counts bookings
-  // that have moved past CONFIRMED, not ones merely due to arrive. A guest
-  // who both arrived and departed today still counts here.
+  // Arrivals *completed* today (today = the hotel's own local calendar day,
+  // per its timezone setting, not the server's UTC day) — checkInDate is
+  // stamped with the actual arrival date at check-in (see CheckinService),
+  // so this counts bookings that have moved past CONFIRMED, not ones merely
+  // due to arrive. A guest who both arrived and departed today still counts here.
   private async getArrivalsCompletedToday(hotelId: string, todayStart: Date, tomorrowStart: Date) {
     return this.prisma.booking.count({
       where: {
@@ -188,8 +192,9 @@ export class DashboardService {
     });
   }
 
-  // Checkouts *completed* today — checkOutDate is stamped with the actual
-  // departure date at checkout (see CheckoutService), so this counts
+  // Checkouts *completed* today (hotel-local calendar day, see
+  // getArrivalsCompletedToday above) — checkOutDate is stamped with the
+  // actual departure date at checkout (see CheckoutService), so this counts
   // bookings that have actually checked out, not ones merely due to leave.
   private async getDeparturesCompletedToday(hotelId: string, todayStart: Date, tomorrowStart: Date) {
     return this.prisma.booking.count({
@@ -210,10 +215,15 @@ export class DashboardService {
    * active (non-cancelled/no-show/draft) booking covering that date, not a
    * snapshot of Room.status (which only reflects *right now*). Revenue
    * reuses the same CHARGE-minus-REFUND definition as the summary KPI.
+   *
+   * `includeRevenue` mirrors getSummary's gate — callers without a
+   * finance-visible role get `revenue: null` per day and skip the
+   * underlying Payment aggregates entirely.
    */
-  async getTrends(hotelId: string, days: number) {
+  async getTrends(hotelId: string, days: number, includeRevenue: boolean) {
     const now = new Date();
-    const todayStart = startOfDay(now);
+    const hotel = await this.prisma.hotel.findUniqueOrThrow({ where: { id: hotelId } });
+    const todayStart = startOfDayInTimeZone(now, hotel.timezone);
     const rangeEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
     const rangeStart = new Date(todayStart.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
 
@@ -226,7 +236,7 @@ export class DashboardService {
           checkInDate: { lt: rangeEnd },
           checkOutDate: { gt: rangeStart },
         },
-        select: { checkInDate: true, checkOutDate: true, bookingRooms: { select: { roomId: true } } },
+        select: { status: true, checkInDate: true, checkOutDate: true, bookingRooms: { select: { roomId: true } } },
       }),
       this.prisma.booking.groupBy({
         by: ['source'],
@@ -245,16 +255,17 @@ export class DashboardService {
       dayStarts.push(d);
     }
 
-    const revenueByDay = await Promise.all(
-      dayStarts.map((d) => this.netRevenue(hotelId, d, new Date(d.getTime() + 24 * 60 * 60 * 1000))),
-    );
+    const revenueByDay = includeRevenue
+      ? await Promise.all(dayStarts.map((d) => this.netRevenue(hotelId, d, new Date(d.getTime() + 24 * 60 * 60 * 1000))))
+      : dayStarts.map(() => null);
 
     const dayRows = dayStarts.map((d, i) => {
+      const isToday = d.getTime() === todayStart.getTime();
       const occupiedRoomIds = new Set<string>();
       for (const b of activeBookings) {
-        if (b.checkInDate <= d && b.checkOutDate > d) {
-          for (const br of b.bookingRooms) occupiedRoomIds.add(br.roomId);
-        }
+        const covers = isToday ? this.occupiesRoomToday(b, d) : b.checkInDate <= d && b.checkOutDate > d;
+        if (!covers) continue;
+        for (const br of b.bookingRooms) occupiedRoomIds.add(br.roomId);
       }
       return {
         date: d.toISOString().slice(0, 10),
@@ -267,5 +278,23 @@ export class DashboardService {
       days: dayRows,
       bookingSources: sourceRows.map((r) => ({ source: r.source, count: r._count._all })),
     };
+  }
+
+  /**
+   * Whether a booking occupies its room *today* specifically — unlike past
+   * days in the trend, today needs real stay state, not just date-range
+   * arithmetic, at the checkOutDate boundary:
+   *  - Already CHECKED_OUT/COMPLETED: the guest is gone regardless of what
+   *    checkOutDate says — the one-night billing floor (CheckoutService) can
+   *    leave it later than today even for a same-day check-in/check-out.
+   *  - Still CHECKED_IN with checkOutDate == today: the guest hasn't
+   *    actually left yet, so the room stays occupied through today even
+   *    though the half-open [checkInDate, checkOutDate) test below would
+   *    otherwise drop it right at the checkout date.
+   */
+  private occupiesRoomToday(b: { status: string; checkInDate: Date; checkOutDate: Date }, today: Date): boolean {
+    if (b.status === 'CHECKED_OUT' || b.status === 'COMPLETED') return false;
+    if (b.status === 'CHECKED_IN') return b.checkInDate <= today;
+    return b.checkInDate <= today && b.checkOutDate > today;
   }
 }

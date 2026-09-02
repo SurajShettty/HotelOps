@@ -2,6 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogService, fieldDiff, snapshot } from '../audit-logs/audit-log.service';
+import { RoleName } from '../../common/decorators/roles.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { AssignRoleDto } from './dto/assign-role.dto';
 
@@ -21,6 +22,17 @@ export class UsersService {
       include: { role: true },
     });
     return grants.map((g) => ({ hotelId: g.hotelId, role: g.role.name }));
+  }
+
+  /**
+   * True if `userId` holds a platform-wide SUPER_ADMIN grant, or one of
+   * `roles` scoped to `hotelId`. For in-handler field-level gating (e.g.
+   * redacting revenue from an otherwise-shared response) that's more nuanced
+   * than a flat `@Roles`-decorated 403 — see DashboardController/NotificationsController.
+   */
+  async hasAnyRoleForHotel(userId: string, hotelId: string, roles: RoleName[]): Promise<boolean> {
+    const grants = await this.findGrantsForUser(userId);
+    return grants.some((g) => (g.hotelId === null && g.role === 'SUPER_ADMIN') || (g.hotelId === hotelId && roles.includes(g.role as RoleName)));
   }
 
   /**

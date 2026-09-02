@@ -1,7 +1,12 @@
 import { Controller, Get, Param, Res } from '@nestjs/common';
 import { Response } from 'express';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { InvoicesService } from './invoices.service';
 
+// `hotelId` query param on these routes is read by RolesGuard for scoping
+// only, same convention as PATCH /rooms/:id/floor — invoices are keyed by
+// their own id and don't otherwise need it.
+@Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST', 'FINANCE')
 @Controller('invoices')
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}

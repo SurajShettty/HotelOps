@@ -4,10 +4,13 @@ import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { AlertTriangle, ArrowLeft } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
+import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, ErrorBanner, Input, Label } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { GuestLoyaltyBadge, GuestLoyaltyTier } from '@/components/ui/guest-loyalty-badge';
 import { GuestFlagBadge } from '@/components/ui/guest-flag-badge';
+import { RequireRole } from '@/components/ui/require-role';
+import { RECEPTIONIST_AREA_ROLES } from '@/lib/roles';
 
 interface Booking {
   id: string;
@@ -34,6 +37,7 @@ interface GuestDetail {
 export default function GuestDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const { hotelId } = useCurrentHotel();
   const [guest, setGuest] = useState<GuestDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -44,20 +48,21 @@ export default function GuestDetailPage() {
   const [flagging, setFlagging] = useState(false);
 
   useEffect(() => {
-    apiFetch<GuestDetail>(`/guests/${params.id}`)
+    if (!hotelId) return;
+    apiFetch<GuestDetail>(`/guests/${params.id}?hotelId=${hotelId}`)
       .then((g) => {
         setGuest(g);
         setNotes(g.notes ?? '');
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load guest'))
       .finally(() => setLoading(false));
-  }, [params.id]);
+  }, [params.id, hotelId]);
 
   async function handleSaveNotes() {
     setSaving(true);
     setError(null);
     try {
-      const updated = await apiFetch<GuestDetail>(`/guests/${params.id}`, {
+      const updated = await apiFetch<GuestDetail>(`/guests/${params.id}?hotelId=${hotelId}`, {
         method: 'PATCH',
         body: JSON.stringify({ notes }),
       });
@@ -74,7 +79,7 @@ export default function GuestDetailPage() {
     setFlagging(true);
     setError(null);
     try {
-      const updated = await apiFetch<GuestDetail>(`/guests/${params.id}/flag`, {
+      const updated = await apiFetch<GuestDetail>(`/guests/${params.id}/flag?hotelId=${hotelId}`, {
         method: 'POST',
         body: JSON.stringify({ reason: flagReason.trim() }),
       });
@@ -92,7 +97,7 @@ export default function GuestDetailPage() {
     setFlagging(true);
     setError(null);
     try {
-      const updated = await apiFetch<GuestDetail>(`/guests/${params.id}/unflag`, { method: 'POST' });
+      const updated = await apiFetch<GuestDetail>(`/guests/${params.id}/unflag?hotelId=${hotelId}`, { method: 'POST' });
       setGuest(updated);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to remove flag');
@@ -106,6 +111,7 @@ export default function GuestDetailPage() {
   if (!guest) return null;
 
   return (
+    <RequireRole allowed={RECEPTIONIST_AREA_ROLES}>
     <div>
       <button onClick={() => router.push('/guests')} className="mb-4 flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-900">
         <ArrowLeft className="h-4 w-4" /> Back to guests
@@ -208,5 +214,6 @@ export default function GuestDetailPage() {
         </Card>
       </div>
     </div>
+    </RequireRole>
   );
 }

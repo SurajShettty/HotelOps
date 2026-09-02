@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
+import { FINANCE_AREA_ROLES, HOUSEKEEPING_AREA_ROLES, RECEPTIONIST_AREA_ROLES, hasAnyRole, roleAtHotel, useRoleGrants } from '@/lib/roles';
 import { Card, EmptyState, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { Pagination } from '@/components/ui/pagination';
@@ -14,13 +15,15 @@ type ReportType = 'occupancy' | 'revenue' | 'bookings' | 'cancellations' | 'hous
 const PAGINATED_TYPES: ReportType[] = ['bookings', 'cancellations', 'housekeeping'];
 const PAGE_SIZE = 25;
 
-const REPORT_TYPES: { key: ReportType; label: string }[] = [
-  { key: 'occupancy', label: 'Occupancy' },
-  { key: 'revenue', label: 'Revenue' },
-  { key: 'bookings', label: 'Bookings' },
-  { key: 'cancellations', label: 'Cancellations' },
-  { key: 'housekeeping', label: 'Housekeeping' },
-  { key: 'housekeeping-staff', label: 'Housekeeping by Staff' },
+// Mirrors each report's @Roles(...) on ReportsController exactly, so a tab
+// never shows for a role whose request would just 403.
+const REPORT_TYPES: { key: ReportType; label: string; roles: string[] }[] = [
+  { key: 'occupancy', label: 'Occupancy', roles: RECEPTIONIST_AREA_ROLES },
+  { key: 'revenue', label: 'Revenue', roles: FINANCE_AREA_ROLES },
+  { key: 'bookings', label: 'Bookings', roles: RECEPTIONIST_AREA_ROLES },
+  { key: 'cancellations', label: 'Cancellations', roles: RECEPTIONIST_AREA_ROLES },
+  { key: 'housekeeping', label: 'Housekeeping', roles: HOUSEKEEPING_AREA_ROLES },
+  { key: 'housekeeping-staff', label: 'Housekeeping by Staff', roles: HOUSEKEEPING_AREA_ROLES },
 ];
 
 // housekeeping-staff hits GET /reports/housekeeping/by-staff, not /reports/housekeeping-staff
@@ -39,6 +42,12 @@ function defaultTo() {
 
 export default function ReportsPage() {
   const { hotelId, ready } = useCurrentHotel();
+  const roleGrants = useRoleGrants();
+  const myRole = roleAtHotel(roleGrants, hotelId);
+  // null while grants haven't loaded yet — every tab is provisionally hidden
+  // until we know which ones this role can actually request.
+  const visibleTypes = roleGrants === null ? [] : REPORT_TYPES.filter((t) => hasAnyRole(myRole, t.roles));
+
   const [type, setType] = useState<ReportType>('occupancy');
   const [from, setFrom] = useState(defaultFrom());
   const [to, setTo] = useState(defaultTo());
@@ -47,8 +56,19 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Once we know this role's visible tabs, make sure `type` actually points
+  // at one — the hardcoded 'occupancy' default would 403 for e.g. a
+  // HOUSEKEEPING-only user, whose first real tab is 'housekeeping'.
   useEffect(() => {
-    if (!ready || !hotelId) return;
+    if (roleGrants === null) return;
+    if (!visibleTypes.some((t) => t.key === type) && visibleTypes.length > 0) {
+      setType(visibleTypes[0].key);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roleGrants, myRole]);
+
+  useEffect(() => {
+    if (!ready || !hotelId || roleGrants === null || !visibleTypes.some((t) => t.key === type)) return;
     setLoading(true);
     setError(null);
     const params = new URLSearchParams({ hotelId, from, to });
@@ -60,10 +80,14 @@ export default function ReportsPage() {
       .then(setData)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load report'))
       .finally(() => setLoading(false));
-  }, [ready, hotelId, type, from, to, page]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, hotelId, roleGrants, type, from, to, page]);
 
   if (!ready) return null;
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
+  if (roleGrants !== null && visibleTypes.length === 0) {
+    return <p className="text-sm text-slate-500">You don't have access to any reports.</p>;
+  }
 
   return (
     <div>
@@ -71,7 +95,7 @@ export default function ReportsPage() {
 
       <Card className="mb-4 flex flex-wrap items-end gap-4 p-4">
         <div className="flex flex-wrap gap-2">
-          {REPORT_TYPES.map((t) => (
+          {visibleTypes.map((t) => (
             <button
               key={t.key}
               onClick={() => { setType(t.key); setData(null); setPage(1); }}

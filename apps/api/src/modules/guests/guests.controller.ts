@@ -1,10 +1,12 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { GuestsService } from './guests.service';
 import { CreateGuestDto } from './dto/create-guest.dto';
 import { UpdateGuestDto } from './dto/update-guest.dto';
 import { FlagGuestDto } from './dto/flag-guest.dto';
 
+@Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
 @Controller('guests')
 export class GuestsController {
   constructor(private readonly guestsService: GuestsService) {}

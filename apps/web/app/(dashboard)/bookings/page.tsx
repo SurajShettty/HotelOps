@@ -4,6 +4,9 @@ import { useEffect, useState } from 'react';
 import { ArrowLeftRight, CalendarRange, DoorOpen, Download, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
 import { apiFetch, ApiError, downloadFile } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
+import { todayInTimeZone } from '@/lib/format';
+import { RequireRole } from '@/components/ui/require-role';
+import { NON_HOUSEKEEPING_ROLES } from '@/lib/roles';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
@@ -339,7 +342,8 @@ function ChangeRoomForm({
   onDone: () => void;
   onCancel: () => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
+  const { timezone } = useCurrentHotel();
+  const today = todayInTimeZone(timezone);
   const checkOutDate = booking.checkOutDate.slice(0, 10);
 
   const [bookingRoomId, setBookingRoomId] = useState(booking.bookingRooms[0]?.id ?? '');
@@ -550,7 +554,7 @@ function ChangeRoomForm({
 }
 
 export default function BookingsPage() {
-  const { hotelId, ready } = useCurrentHotel();
+  const { hotelId, ready, timezone } = useCurrentHotel();
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -569,7 +573,7 @@ export default function BookingsPage() {
   const [quickFilter, setQuickFilter] = useState<'ARRIVING_TODAY' | 'DEPARTING_TODAY' | null>(null);
   const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInTimeZone(timezone);
 
   function toggleQuickFilter(filter: 'ARRIVING_TODAY' | 'DEPARTING_TODAY') {
     const turningOn = quickFilter !== filter;
@@ -630,7 +634,7 @@ export default function BookingsPage() {
     setError(null);
     setCancellingId(id);
     try {
-      await apiFetch(`/bookings/${id}/cancel`, { method: 'POST' });
+      await apiFetch(`/bookings/${id}/cancel?hotelId=${hotelId}`, { method: 'POST' });
       reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to cancel booking');
@@ -643,7 +647,7 @@ export default function BookingsPage() {
     setError(null);
     setDownloadingInvoiceId(invoiceId);
     try {
-      await downloadFile(`/invoices/${invoiceId}/pdf`, `invoice-${invoiceId.slice(0, 8)}.pdf`);
+      await downloadFile(`/invoices/${invoiceId}/pdf?hotelId=${hotelId}`, `invoice-${invoiceId.slice(0, 8)}.pdf`);
     } catch {
       setError('Failed to download invoice');
     } finally {
@@ -655,6 +659,7 @@ export default function BookingsPage() {
   if (!hotelId) return <p className="text-sm text-slate-500">Create a hotel from the Dashboard first.</p>;
 
   return (
+    <RequireRole allowed={NON_HOUSEKEEPING_ROLES}>
     <div>
       <PageHeader
         title="Bookings"
@@ -896,5 +901,6 @@ export default function BookingsPage() {
         </Card>
       )}
     </div>
+    </RequireRole>
   );
 }

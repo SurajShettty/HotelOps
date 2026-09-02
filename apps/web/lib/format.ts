@@ -14,3 +14,8 @@ export function formatTime12h(hhmm: string) {
 export function localTimeHHmm(date: Date, timeZone: string) {
   return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 }
+
+/** Today's date ("YYYY-MM-DD") as it currently is in `timeZone` — the hotel's business day, not the browser's local one. */
+export function todayInTimeZone(timeZone: string) {
+  return new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+}

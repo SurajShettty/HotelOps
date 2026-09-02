@@ -3,7 +3,7 @@ import { Prisma } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AvailabilityService } from '../rooms/availability.service';
 import { normalizePagination } from '../../common/pagination';
-import { todayUtcDateOnly } from '../../common/date.util';
+import { todayDateOnlyInTimeZone } from '../../common/date.util';
 import { AuditLogService } from '../audit-logs/audit-log.service';
 import { HousekeepingService } from '../housekeeping/housekeeping.service';
 import { GUEST_LOYALTY_INCLUDE, withGuestLoyaltyBadge } from '../guests/guest-loyalty';
@@ -409,7 +409,8 @@ export class BookingsService {
       const bookingRoom = existing.bookingRooms.find((br) => br.id === dto.bookingRoomId);
       if (!bookingRoom) throw new NotFoundException('This room is not part of the booking');
 
-      const effectiveDate = todayUtcDateOnly();
+      const hotel = await tx.hotel.findUniqueOrThrow({ where: { id: dto.hotelId } });
+      const effectiveDate = todayDateOnlyInTimeZone(hotel.timezone);
       if (effectiveDate >= existing.checkOutDate) {
         throw new BadRequestException({
           code: 'VALIDATION_ERROR',
