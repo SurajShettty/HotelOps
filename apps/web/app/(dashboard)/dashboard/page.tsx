@@ -6,6 +6,8 @@ import {
   AlertTriangle,
   ArrowRight,
   BedDouble,
+  Bell,
+  BellRing,
   Building2,
   CheckCircle2,
   Clock,
@@ -27,7 +29,7 @@ import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 import { DashboardTrends } from '@/components/ui/dashboard-trends';
 import { OccupancyHeatmap } from '@/components/ui/occupancy-heatmap';
 import { RequireRole } from '@/components/ui/require-role';
-import { NON_HOUSEKEEPING_ROLES } from '@/lib/roles';
+import { NON_HOUSEKEEPING_ROLES, RECEPTIONIST_AREA_ROLES, hasAnyRole, roleAtHotel, useRoleGrants } from '@/lib/roles';
 
 interface Room {
   id: string;
@@ -51,7 +53,15 @@ interface DashboardSummary {
   today: { arrivals: number; departures: number };
   alerts: {
     roomsNotReadyForArrivals: { bookingId: string; guestName: string; roomNumber: string; roomStatus: string }[];
-    overdueHousekeeping: { taskId: string; roomNumber: string; status: string; minutesOpen: number; assignedToName: string | null }[];
+    overdueHousekeeping: {
+      taskId: string;
+      roomNumber: string;
+      status: string;
+      minutesOpen: number;
+      assignedToName: string | null;
+      assignedToId: string | null;
+      nudgedMinutesAgo: number | null;
+    }[];
     roomsOutOfService: { roomId: string; roomNumber: string; reason: string }[];
     noShows: { bookingId: string; guestName: string; roomNumbers: string[]; checkInDate: string }[];
     overstays: { bookingId: string; guestName: string; roomNumbers: string[]; checkOutDate: string; checkOutTime: string; dueToday: boolean }[];
@@ -114,6 +124,8 @@ function CreateHotelForm() {
 
 export default function DashboardPage() {
   const { hotelId, ready, timezone } = useCurrentHotel();
+  const roleGrants = useRoleGrants();
+  const canNudge = hasAnyRole(roleAtHotel(roleGrants, hotelId), RECEPTIONIST_AREA_ROLES);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -166,6 +178,23 @@ export default function DashboardPage() {
       reload();
     } catch {
       // Non-fatal — the alert list below still reflects the server's true state on next reload.
+    }
+  }
+
+  const [nudgingTaskId, setNudgingTaskId] = useState<string | null>(null);
+
+  // In-app only — no SMS/email/push integration exists, so this timestamps
+  // the task and the Housekeeping board highlights it for the assignee next
+  // time they open it (see HousekeepingService.nudge).
+  async function handleNudge(taskId: string) {
+    setNudgingTaskId(taskId);
+    try {
+      await apiFetch(`/housekeeping/tasks/${taskId}/nudge?hotelId=${hotelId}`, { method: 'POST' });
+      reload();
+    } catch {
+      // Non-fatal — the alert list below still reflects the server's true state on next reload.
+    } finally {
+      setNudgingTaskId(null);
     }
   }
 
@@ -255,9 +284,9 @@ export default function DashboardPage() {
           </div>
 
           {alertCount > 0 && (
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-x-6 gap-y-4 md:grid-cols-3 md:divide-x md:divide-slate-100">
               {alerts.roomsNotReadyForArrivals.length > 0 && (
-                <div>
+                <div className="md:pl-6 first:md:pl-0">
                   <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
                     <DoorClosed className="h-3.5 w-3.5" /> Room not ready for arrival
                   </h3>
@@ -271,24 +300,49 @@ export default function DashboardPage() {
                 </div>
               )}
               {alerts.overdueHousekeeping.length > 0 && (
-                <div>
+                <div className="md:pl-6 first:md:pl-0">
                   <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
                     <Clock className="h-3.5 w-3.5" /> Overdue housekeeping
                   </h3>
                   <ul className="space-y-1.5">
                     {alerts.overdueHousekeeping.map((t) => (
-                      <li key={t.taskId} className="text-sm text-slate-700">
-                        Room {t.roomNumber} — {t.status.toLowerCase().replace('_', ' ')}{' '}
-                        <span className="text-slate-400">
-                          ({t.minutesOpen} min{t.assignedToName ? ` · ${t.assignedToName}` : ' · unassigned'})
+                      <li key={t.taskId} className="flex items-center justify-between gap-2 text-sm text-slate-700">
+                        <span>
+                          Room {t.roomNumber} — {t.status.toLowerCase().replace('_', ' ')}{' '}
+                          <span className="text-slate-400">
+                            ({t.minutesOpen} min{t.assignedToName ? ` · ${t.assignedToName}` : ' · unassigned'})
+                          </span>
                         </span>
+                        {t.assignedToId && canNudge && (
+                          <button
+                            type="button"
+                            onClick={() => handleNudge(t.taskId)}
+                            disabled={nudgingTaskId === t.taskId}
+                            title={t.nudgedMinutesAgo !== null ? `Notified ${t.assignedToName} ${t.nudgedMinutesAgo} min ago` : `Notify ${t.assignedToName}`}
+                            className={`flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium transition-colors ${
+                              t.nudgedMinutesAgo !== null
+                                ? 'bg-slate-100 text-slate-500 hover:bg-slate-200'
+                                : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                            } disabled:opacity-50`}
+                          >
+                            {t.nudgedMinutesAgo !== null ? (
+                              <>
+                                <BellRing className="h-3 w-3" /> Notified {t.nudgedMinutesAgo}m ago
+                              </>
+                            ) : (
+                              <>
+                                <Bell className="h-3 w-3" /> {nudgingTaskId === t.taskId ? 'Notifying…' : 'Notify'}
+                              </>
+                            )}
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ul>
                 </div>
               )}
               {alerts.roomsOutOfService.length > 0 && (
-                <div>
+                <div className="md:pl-6 first:md:pl-0">
                   <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
                     <Wrench className="h-3.5 w-3.5" /> Rooms out of service
                   </h3>
@@ -302,7 +356,7 @@ export default function DashboardPage() {
                 </div>
               )}
               {alerts.noShows.length > 0 && (
-                <div>
+                <div className="md:pl-6 first:md:pl-0">
                   <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
                     <UserX className="h-3.5 w-3.5" /> No-shows
                   </h3>
@@ -325,7 +379,7 @@ export default function DashboardPage() {
                 </div>
               )}
               {alerts.overstays.length > 0 && (
-                <div>
+                <div className="md:pl-6 first:md:pl-0">
                   <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">
                     <Clock className="h-3.5 w-3.5" /> Overstays
                   </h3>

@@ -24,6 +24,29 @@ export class HousekeepingController {
   ) {
     return this.housekeepingService.updateTask(id, body, user.id);
   }
+
+  // Narrower than the controller's class-level @Roles — the people who'd
+  // realistically chase an overdue task (front desk needing a room, or
+  // management) rather than housekeeping nudging itself.
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
+  @Post(':id/nudge')
+  nudge(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
+    return this.housekeepingService.nudge(id, user.id);
+  }
+}
+
+// Narrow, purpose-built directory for the assignee dropdown on the
+// Housekeeping board — separate from GET /users (full profiles, every role,
+// management-only) so RECEPTIONIST/HOUSEKEEPING can populate it themselves.
+@Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST', 'HOUSEKEEPING')
+@Controller('housekeeping/staff')
+export class HousekeepingStaffController {
+  constructor(private readonly housekeepingService: HousekeepingService) {}
+
+  @Get()
+  list(@Query('hotelId') hotelId: string) {
+    return this.housekeepingService.listAssignableStaff(hotelId);
+  }
 }
 
 // The staff-per-floor roster that Hotel.housekeepingAutoAssignEnabled reads

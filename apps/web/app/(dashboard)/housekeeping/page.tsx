@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowRight, ChevronDown, Sparkles, UserRound } from 'lucide-react';
+import { ArrowRight, BellRing, ChevronDown, Sparkles, UserRound } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Card, ErrorBanner, PageHeader } from '@/components/ui/primitives';
@@ -18,6 +18,17 @@ interface Task {
   priority: number;
   room: { roomNumber: string };
   assignedToId: string | null;
+  assignedTo: { id: string; fullName: string } | null;
+  nudgedAt: string | null;
+  nudgedBy: { fullName: string } | null;
+}
+
+// A nudge older than this no longer needs to stand out — it's already been
+// seen (or the moment for it has passed).
+const NUDGE_HIGHLIGHT_MINUTES = 60;
+
+function minutesAgo(iso: string) {
+  return Math.round((Date.now() - new Date(iso).getTime()) / 60000);
 }
 
 interface StaffOption {
@@ -31,10 +42,6 @@ const COLUMNS: { key: Task['status']; label: string; next?: Task['status'] }[] =
   { key: 'INSPECTED', label: 'Inspected', next: 'READY' },
   { key: 'READY', label: 'Ready' },
 ];
-
-interface RoleGrant {
-  role: string;
-}
 
 export default function HousekeepingPage() {
   const { hotelId, ready } = useCurrentHotel();
@@ -60,8 +67,8 @@ export default function HousekeepingPage() {
 
   useEffect(() => {
     if (!hotelId) return;
-    apiFetch<({ id: string; fullName: string; roles: RoleGrant[] })[]>(`/users?hotelId=${hotelId}`)
-      .then((users) => setStaff(users.filter((u) => u.roles.some((r) => r.role === 'HOUSEKEEPING'))))
+    apiFetch<StaffOption[]>(`/housekeeping/staff?hotelId=${hotelId}`)
+      .then(setStaff)
       .catch(() => setStaff([]));
   }, [hotelId]);
 
@@ -122,15 +129,33 @@ export default function HousekeepingPage() {
                 ) : (
                   <div className="space-y-2">
                     {columnTasks.map((t) => {
-                      const assignedStaff = staff.find((s) => s.id === t.assignedToId) ?? null;
+                      // The task's own `assignedTo` (sent by GET /housekeeping/tasks)
+                      // is the source of truth for who's assigned — the `staff`
+                      // list is only for populating reassignment options, and
+                      // may not include this person (e.g. their role changed
+                      // since assignment, or /housekeeping/staff hasn't loaded).
+                      const assignedStaff = t.assignedTo;
+                      const assignOptions =
+                        assignedStaff && !staff.some((s) => s.id === assignedStaff.id) ? [...staff, assignedStaff] : staff;
+                      const nudgeAge = t.nudgedAt ? minutesAgo(t.nudgedAt) : null;
+                      const recentlyNudged = nudgeAge !== null && nudgeAge < NUDGE_HIGHLIGHT_MINUTES;
                       return (
-                        <div key={t.id} className="rounded-lg border border-slate-200 p-3">
+                        <div
+                          key={t.id}
+                          className={`rounded-lg border p-3 ${recentlyNudged ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200'}`}
+                        >
                           <div className="flex items-center justify-between">
                             <span className="text-sm font-medium text-slate-900">Room {t.room.roomNumber}</span>
                             {t.priority > 0 && (
                               <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">Priority</span>
                             )}
                           </div>
+                          {recentlyNudged && (
+                            <div className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-amber-700">
+                              <BellRing className="h-3 w-3" />
+                              {t.nudgedBy ? `${t.nudgedBy.fullName} flagged this` : 'Flagged'} · {nudgeAge}m ago
+                            </div>
+                          )}
                           <div className="mt-2.5 flex items-center gap-1.5">
                             <div
                               className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-semibold ${
@@ -151,7 +176,7 @@ export default function HousekeepingPage() {
                                 }`}
                               >
                                 <option value="">Unassigned</option>
-                                {staff.map((s) => (
+                                {assignOptions.map((s) => (
                                   <option key={s.id} value={s.id}>{s.fullName}</option>
                                 ))}
                               </select>

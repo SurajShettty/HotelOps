@@ -111,6 +111,8 @@ export class DashboardService {
       status: task.status,
       minutesOpen: Math.round((now.getTime() - task.createdAt.getTime()) / 60000),
       assignedToName: task.assignedTo?.fullName ?? null,
+      assignedToId: task.assignedToId,
+      nudgedMinutesAgo: task.nudgedAt ? Math.round((now.getTime() - task.nudgedAt.getTime()) / 60000) : null,
     }));
   }
 

@@ -30,7 +30,8 @@ export type NotificationType =
   | 'MAINTENANCE'
   | 'DAILY_BRIEFING'
   | 'ROOM_BLOCKED_TOO_LONG'
-  | 'ROOM_UNBOOKED_TOO_LONG';
+  | 'ROOM_UNBOOKED_TOO_LONG'
+  | 'TASK_NUDGE';
 
 export interface NotificationItem {
   id: string;
@@ -58,7 +59,7 @@ export class NotificationsService {
    * separate write path to keep in sync, and it mirrors how DashboardService
    * already computes its alert lists on read.
    */
-  async getForHotel(hotelId: string, includeRevenue: boolean) {
+  async getForHotel(hotelId: string, includeRevenue: boolean, userId: string) {
     const now = new Date();
     const hotel = await this.prisma.hotel.findUniqueOrThrow({ where: { id: hotelId } });
     // "Today" is the hotel's own local calendar day, per its timezone
@@ -75,6 +76,7 @@ export class NotificationsService {
       maintenanceAlerts,
       blockedTooLong,
       unbookedTooLong,
+      taskNudges,
       dailyBriefing,
     ] = await Promise.all([
       this.getUpcomingCheckIns(hotelId, todayStart, horizonEnd),
@@ -83,6 +85,7 @@ export class NotificationsService {
       this.getMaintenanceAlerts(hotelId, now),
       this.getBlockedTooLong(hotelId, now),
       this.getUnbookedTooLong(hotelId, now),
+      this.getTaskNudges(hotelId, userId),
       this.getDailyBriefing(hotelId, todayStart, tomorrowStart, includeRevenue),
     ]);
 
@@ -93,7 +96,7 @@ export class NotificationsService {
     // the underlying problem drags on.
     const items = [
       dailyBriefing,
-      ...[...upcomingCheckIns, ...upcomingCheckOuts, ...bookingConfirmations, ...maintenanceAlerts, ...blockedTooLong, ...unbookedTooLong].sort(
+      ...[...upcomingCheckIns, ...upcomingCheckOuts, ...bookingConfirmations, ...maintenanceAlerts, ...blockedTooLong, ...unbookedTooLong, ...taskNudges].sort(
         (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
       ),
     ];
@@ -108,6 +111,7 @@ export class NotificationsService {
         maintenance: maintenanceAlerts.length,
         blockedTooLong: blockedTooLong.length,
         unbookedTooLong: unbookedTooLong.length,
+        taskNudge: taskNudges.length,
       },
     };
   }
@@ -178,6 +182,31 @@ export class NotificationsService {
         ...(includeRevenue ? [{ label: 'Expected Revenue', value: formatInr(expectedRevenue) }] : []),
       ],
     };
+  }
+
+  /**
+   * Unlike every other item here, this one is per-viewer, not hotel-wide —
+   * it only surfaces a task nudge (see HousekeepingService.nudge) to the
+   * staff member it was actually aimed at, so a housekeeping login sees
+   * "you were flagged," not everyone else's pings too. Stays until the task
+   * is done or reassigned, since it's a still-outstanding to-do, not a
+   * time-boxed alert.
+   */
+  private async getTaskNudges(hotelId: string, userId: string): Promise<NotificationItem[]> {
+    const tasks = await this.prisma.housekeepingTask.findMany({
+      where: { room: { hotelId }, assignedToId: userId, nudgedAt: { not: null }, status: { not: 'READY' } },
+      include: { room: true, nudgedBy: { select: { fullName: true } } },
+      orderBy: { nudgedAt: 'desc' },
+    });
+
+    return tasks.map((t) => ({
+      id: `task-nudge-${t.id}-${t.nudgedAt!.getTime()}`,
+      type: 'TASK_NUDGE' as const,
+      title: 'Room needs your attention',
+      message: t.nudgedBy ? `Room ${t.room.roomNumber} — flagged by ${t.nudgedBy.fullName}` : `Room ${t.room.roomNumber}`,
+      timestamp: t.nudgedAt!.toISOString(),
+      dueToday: true,
+    }));
   }
 
   // Same "latest task per room, room not currently occupied" definition HousekeepingService.findTasks uses for its board.

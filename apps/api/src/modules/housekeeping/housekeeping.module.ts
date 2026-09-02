@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
-import { HousekeepingController, HousekeepingFloorAssignmentsController } from './housekeeping.controller';
+import { HousekeepingController, HousekeepingFloorAssignmentsController, HousekeepingStaffController } from './housekeeping.controller';
 import { HousekeepingService } from './housekeeping.service';
 
 @Module({
-  controllers: [HousekeepingController, HousekeepingFloorAssignmentsController],
+  controllers: [HousekeepingController, HousekeepingStaffController, HousekeepingFloorAssignmentsController],
   providers: [HousekeepingService],
   exports: [HousekeepingService],
 })

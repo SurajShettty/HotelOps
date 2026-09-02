@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogService, fieldDiff } from '../audit-logs/audit-log.service';
@@ -32,6 +32,22 @@ export class HousekeepingService {
     if (!hotel?.housekeepingAutoAssignEnabled) return undefined;
     const assignment = await client.housekeepingFloorAssignment.findUnique({ where: { hotelId_floor: { hotelId, floor } } });
     return assignment?.userId;
+  }
+
+  /**
+   * Just id+name for staff holding HOUSEKEEPING at this hotel — powers the
+   * assignee dropdown on the Housekeeping board. Deliberately narrower than
+   * GET /users (full profiles, every role, management-only) so RECEPTIONIST/
+   * HOUSEKEEPING can populate that dropdown without needing broader access
+   * to the staff directory.
+   */
+  async listAssignableStaff(hotelId: string) {
+    const grants = await this.prisma.userHotelRole.findMany({
+      where: { hotelId, role: { name: 'HOUSEKEEPING' }, user: { isActive: true } },
+      include: { user: { select: { id: true, fullName: true } } },
+      orderBy: { user: { fullName: 'asc' } },
+    });
+    return grants.map((g) => g.user);
   }
 
   listFloorAssignments(hotelId: string) {
@@ -69,7 +85,11 @@ export class HousekeepingService {
   async findTasks(hotelId: string, status?: string) {
     const latestPerRoom = await this.prisma.housekeepingTask.findMany({
       where: { room: { hotelId } },
-      include: { room: true, assignedTo: { select: { id: true, fullName: true, email: true } } },
+      include: {
+        room: true,
+        assignedTo: { select: { id: true, fullName: true, email: true } },
+        nudgedBy: { select: { id: true, fullName: true } },
+      },
       orderBy: { createdAt: 'desc' },
       distinct: ['roomId'],
     });
@@ -106,5 +126,26 @@ export class HousekeepingService {
     });
 
     return task;
+  }
+
+  /**
+   * In-app-only "notify the assignee" for the Dashboard's overdue-housekeeping
+   * alert — no SMS/email/push integration exists in this codebase, so this
+   * just timestamps the task; the Housekeeping board highlights any task with
+   * a recent nudgedAt so the assignee sees it next time they open their board.
+   */
+  async nudge(id: string, actorId: string) {
+    const task = await this.prisma.housekeepingTask.findUniqueOrThrow({ where: { id } });
+    if (!task.assignedToId) {
+      throw new BadRequestException({ code: 'NO_ASSIGNEE', message: 'This task has no assigned staff to notify.' });
+    }
+    if (task.status === 'READY') {
+      throw new BadRequestException({ code: 'INVALID_STATE', message: 'This task is already done.' });
+    }
+    return this.prisma.housekeepingTask.update({
+      where: { id },
+      data: { nudgedAt: new Date(), nudgedById: actorId },
+      include: { assignedTo: { select: { id: true, fullName: true } } },
+    });
   }
 }

@@ -140,7 +140,8 @@ model User {
   userHotelRoles    UserHotelRole[]
   bookingsCreated   Booking[]          @relation("BookingCreatedBy")
   roomBlocksCreated RoomBlock[]
-  housekeepingTasks HousekeepingTask[]
+  housekeepingTasks       HousekeepingTask[]
+  housekeepingTasksNudged HousekeepingTask[]              @relation("HousekeepingTaskNudgedBy")
   auditLogs         AuditLog[]
   auditLogsReverted AuditLog[]         @relation("AuditLogRevertedBy")
   guestsFlagged     Guest[]            @relation("GuestFlaggedBy")
@@ -419,9 +420,15 @@ model HousekeepingTask {
   priority     Int                @default(0)
   createdAt    DateTime           @default(now()) @map("created_at")
   completedAt  DateTime?          @map("completed_at")
+  // Set when a manager/front-desk user pings the assignee about an overdue
+  // task from the Dashboard's alert (see HousekeepingService.nudge) — an
+  // in-app-only signal surfaced on the Housekeeping board, not a push/SMS/email.
+  nudgedAt     DateTime?          @map("nudged_at")
+  nudgedById   String?            @map("nudged_by")
 
   room       Room  @relation(fields: [roomId], references: [id], onDelete: Cascade)
   assignedTo User? @relation(fields: [assignedToId], references: [id])
+  nudgedBy   User? @relation("HousekeepingTaskNudgedBy", fields: [nudgedById], references: [id])
 
   @@index([status, priority])
   @@map("housekeeping_tasks")

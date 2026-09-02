@@ -17,6 +17,6 @@ export class NotificationsController {
   @Get()
   async getForHotel(@Query('hotelId') hotelId: string, @CurrentUser() user: CurrentUserPayload) {
     const canSeeRevenue = await this.usersService.hasAnyRoleForHotel(user.id, hotelId, FINANCE_VISIBLE_ROLES);
-    return this.notificationsService.getForHotel(hotelId, canSeeRevenue);
+    return this.notificationsService.getForHotel(hotelId, canSeeRevenue, user.id);
   }
 }
