@@ -14,6 +14,8 @@ import { DateRangePicker } from '@/components/ui/date-range-picker';
 import { Pagination } from '@/components/ui/pagination';
 import { GuestPicker, PickedGuest } from '@/components/ui/guest-picker';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
+import { GuestVerifiedIcon } from '@/components/ui/guest-verified-icon';
+import { Anchor, VerifyIdPopover } from '@/components/ui/verify-id-popover';
 
 const PAGE_SIZE = 25;
 
@@ -38,7 +40,14 @@ interface Booking {
   // which are just calendar days and can be edited afterward.
   checkedInAt: string | null;
   checkedOutAt: string | null;
-  guest: { fullName: string } & GuestBadgeInfo;
+  guest: {
+    id: string;
+    fullName: string;
+    idDocumentType: string | null;
+    idDocumentNumber: string | null;
+    idDocumentUrl: string | null;
+    idVerifiedAt: string | null;
+  } & GuestBadgeInfo;
   bookingRooms: { id: string; occupants: number; rateApplied: string; room: { id: string; roomNumber: string } }[];
   invoice: { id: string } | null;
 }
@@ -328,6 +337,21 @@ function BookingForm({
             ) : null}
           </div>
         </div>
+        {(() => {
+          const nights = nightsBetween(checkIn, checkOut);
+          const rateValue = Number(rate);
+          if (!nights || !rate || !rateValue) return null;
+          return (
+            <div className="flex items-center gap-1.5 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+              <span className="font-medium text-slate-900">{nights} night{nights === 1 ? '' : 's'}</span>
+              <span className="text-slate-400">·</span>
+              <span>{rateValue} × {nights}</span>
+              <span className="text-slate-400">=</span>
+              <span className="font-semibold text-slate-900">{money(rateValue * nights)} subtotal</span>
+              <span className="text-slate-400">(taxes &amp; fees applied at checkout)</span>
+            </div>
+          );
+        })()}
         <div className="flex gap-2">
           <Button type="submit" disabled={submitting || availableRooms.length === 0 || overCapacity}>
             {submitting ? (isEdit ? 'Saving…' : 'Creating…') : isEdit ? 'Save Changes' : 'Create Booking'}
@@ -694,6 +718,18 @@ function money(n: string | number) {
   return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function guestInitials(name: string) {
+  return name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+}
+
+/** Whole nights between two "YYYY-MM-DD" dates, or null until both are set. */
+function nightsBetween(checkIn: string, checkOut: string): number | null {
+  if (!checkIn || !checkOut) return null;
+  const ms = new Date(`${checkOut}T00:00:00Z`).getTime() - new Date(`${checkIn}T00:00:00Z`).getTime();
+  const nights = Math.round(ms / 86400000);
+  return nights > 0 ? nights : null;
+}
+
 /**
  * A lighter, in-app alternative to the downloaded PDF — every line that
  * makes up the folio (room nights, logged charges, ad-hoc charges/discounts
@@ -1010,6 +1046,7 @@ export default function BookingsPage() {
   const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
   const [previewInvoiceId, setPreviewInvoiceId] = useState<string | null>(null);
   const [previewStayId, setPreviewStayId] = useState<string | null>(null);
+  const [verifyPopover, setVerifyPopover] = useState<{ guest: Booking['guest']; anchor: Anchor } | null>(null);
 
   const today = todayInTimeZone(timezone);
 
@@ -1260,6 +1297,19 @@ export default function BookingsPage() {
         />
       )}
 
+      {verifyPopover && hotelId && (
+        <VerifyIdPopover
+          hotelId={hotelId}
+          guest={verifyPopover.guest}
+          anchor={verifyPopover.anchor}
+          onClose={() => setVerifyPopover(null)}
+          onVerified={() => {
+            setVerifyPopover(null);
+            reload();
+          }}
+        />
+      )}
+
       {loading ? (
         <p className="text-sm text-slate-400">Loading…</p>
       ) : bookings.length === 0 ? (
@@ -1299,13 +1349,25 @@ export default function BookingsPage() {
                 return (
                   <tr key={b.id} className="hover:bg-slate-50">
                     <td className="px-5 py-3 font-medium text-slate-900">
-                      <span className="flex items-center gap-1.5">
-                        {b.guest.fullName}
-                        <GuestBadges guest={b.guest} />
+                      <span className="flex items-center gap-2.5">
+                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-[10.5px] font-bold text-brand-700">
+                          {guestInitials(b.guest.fullName)}
+                        </span>
+                        <span className="flex items-center gap-1.5">
+                          {b.guest.fullName}
+                          <GuestBadges guest={b.guest} />
+                          <GuestVerifiedIcon
+                            verifiedAt={b.guest.idVerifiedAt}
+                            onClick={(e) => {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setVerifyPopover({ guest: b.guest, anchor: { top: rect.bottom + 4, left: rect.left } });
+                            }}
+                          />
+                        </span>
                       </span>
                     </td>
-                    <td className="px-5 py-3 text-slate-600">{b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}</td>
-                    <td className="px-5 py-3 text-slate-600">{b.bookingRooms.map((br) => br.occupants).join(', ')}</td>
+                    <td className="px-5 py-3 tabular-nums text-slate-600">{b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}</td>
+                    <td className="px-5 py-3 tabular-nums text-slate-600">{b.bookingRooms.map((br) => br.occupants).join(', ')}</td>
                     <td className="px-5 py-3 text-slate-600">
                       {b.checkInDate.slice(0, 10)}
                       {(b.status === 'CHECKED_IN' || b.status === 'CHECKED_OUT') && stayTime(b.checkedInAt, timezone) && (

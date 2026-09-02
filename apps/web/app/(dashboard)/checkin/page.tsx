@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { DoorOpen, LogIn, Search, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, DoorOpen, FileText, LogIn, Search, ShieldCheck, Upload } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { formatTime12h, localTimeHHmm, todayInTimeZone } from '@/lib/format';
@@ -10,6 +10,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 import { RequireRole } from '@/components/ui/require-role';
 import { RECEPTIONIST_AREA_ROLES } from '@/lib/roles';
+import { ID_DOC_ACCEPT_ATTR, ID_DOCUMENT_TYPES, isIdDocumentPdf, readIdDocumentFile } from '@/lib/id-document';
 
 interface BookingRoom {
   id: string;
@@ -25,12 +26,15 @@ interface Booking {
     fullName: string;
     idDocumentType: string | null;
     idDocumentNumber: string | null;
+    idDocumentUrl: string | null;
     idVerifiedAt: string | null;
   } & GuestBadgeInfo;
   bookingRooms: BookingRoom[];
 }
 
-const ID_DOCUMENT_TYPES = ['Passport', 'Aadhaar', 'Driving License', 'Voter ID', 'Other'];
+function initials(name: string) {
+  return name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+}
 
 interface AvailableRoom {
   id: string;
@@ -47,6 +51,11 @@ export default function CheckinPage() {
   const [deposits, setDeposits] = useState<Record<string, string>>({});
   const [checkingInId, setCheckingInId] = useState<string | null>(null);
   const [guestSearch, setGuestSearch] = useState('');
+  // Bookings that were just checked in this session — kept out of `reload()`
+  // (which would otherwise drop them from `arrivals` the instant their status
+  // moves off CONFIRMED) until the receptionist dismisses the summary below,
+  // so check-in doesn't feel like the row vanished with no confirmation.
+  const [justCheckedIn, setJustCheckedIn] = useState<Record<string, { roomNumbers: string[]; depositAmount: number | null; idVerified: boolean }>>({});
   const [hotelPolicy, setHotelPolicy] = useState<{ timezone: string; checkInTime: string; earlyCheckInFee: string } | null>(null);
   const [waiveEarlyFee, setWaiveEarlyFee] = useState<Record<string, boolean>>({});
   // Alternate rooms offered when a guest's reserved room isn't ready yet —
@@ -73,8 +82,10 @@ export default function CheckinPage() {
   // document (if any) once, then left to the receptionist to edit/confirm.
   const [idDocType, setIdDocType] = useState<Record<string, string>>({});
   const [idDocNumber, setIdDocNumber] = useState<Record<string, string>>({});
+  const [idDocUrl, setIdDocUrl] = useState<Record<string, string>>({});
   const [idVerified, setIdVerified] = useState<Record<string, boolean>>({});
   const [idSeeded, setIdSeeded] = useState<Record<string, boolean>>({});
+  const [docUploadError, setDocUploadError] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!hotelId) return;
@@ -107,6 +118,11 @@ export default function CheckinPage() {
     setIdDocNumber((prev) => {
       const next = { ...prev };
       toSeed.forEach((b) => { next[b.id] = b.guest.idDocumentNumber ?? ''; });
+      return next;
+    });
+    setIdDocUrl((prev) => {
+      const next = { ...prev };
+      toSeed.forEach((b) => { next[b.id] = b.guest.idDocumentUrl ?? ''; });
       return next;
     });
     setIdVerified((prev) => {
@@ -187,6 +203,16 @@ export default function CheckinPage() {
   const isEarlyNow = !!hotelPolicy && localTimeHHmm(new Date(), hotelPolicy.timezone) < hotelPolicy.checkInTime;
   const earlyFeeAmount = hotelPolicy ? Number(hotelPolicy.earlyCheckInFee) : 0;
 
+  function handleIdDocChange(bookingId: string, e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setDocUploadError((prev) => ({ ...prev, [bookingId]: '' }));
+    readIdDocumentFile(file)
+      .then((url) => setIdDocUrl((prev) => ({ ...prev, [bookingId]: url })))
+      .catch((err: Error) => setDocUploadError((prev) => ({ ...prev, [bookingId]: err.message })));
+  }
+
   async function handleCheckin(booking: Booking) {
     setError(null);
     setCheckingInId(booking.id);
@@ -200,17 +226,35 @@ export default function CheckinPage() {
           roomAssignments: booking.bookingRooms.map((br) => ({ bookingRoomId: br.id, roomId: altRoomId ?? br.room.id })),
           ...(depositRaw ? { depositAmount: Number(depositRaw) } : {}),
           waiveEarlyCheckInFee: !!waiveEarlyFee[booking.id],
-          idDocumentType: idDocType[booking.id] || undefined,
-          idDocumentNumber: idDocNumber[booking.id] || undefined,
+          idDocumentType: idDocType[booking.id],
+          idDocumentNumber: idDocNumber[booking.id],
+          idDocumentUrl: idDocUrl[booking.id],
           idVerified: !!idVerified[booking.id],
         }),
       });
-      reload();
+      const altRoomNumber = altRoomId ? altRooms[booking.id]?.find((r) => r.id === altRoomId)?.roomNumber : undefined;
+      setJustCheckedIn((prev) => ({
+        ...prev,
+        [booking.id]: {
+          roomNumbers: altRoomNumber ? [altRoomNumber] : booking.bookingRooms.map((br) => br.room.roomNumber),
+          depositAmount: depositRaw ? Number(depositRaw) : null,
+          idVerified: !!idVerified[booking.id],
+        },
+      }));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Check-in failed');
     } finally {
       setCheckingInId(null);
     }
+  }
+
+  function dismissCheckedIn(bookingId: string) {
+    setJustCheckedIn((prev) => {
+      const next = { ...prev };
+      delete next[bookingId];
+      return next;
+    });
+    reload();
   }
 
   const visibleArrivals = guestSearch.trim()
@@ -252,6 +296,31 @@ export default function CheckinPage() {
       ) : (
         <div className="space-y-3">
           {visibleArrivals.map((b) => {
+            const justDone = justCheckedIn[b.id];
+            if (justDone) {
+              return (
+                <Card key={b.id} className="flex flex-wrap items-center justify-between gap-4 p-5">
+                  <div className="flex items-center gap-3">
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-700">
+                      <CheckCircle2 className="h-5 w-5" />
+                    </span>
+                    <div>
+                      <p className="flex items-center gap-1.5 text-sm font-medium text-slate-900">
+                        {b.guest.fullName} checked in
+                        <span className="tabular-nums text-slate-500">— Room {justDone.roomNumbers.join(', ')}</span>
+                      </p>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {justDone.depositAmount ? `Deposit collected: ${justDone.depositAmount}` : 'No deposit collected'}
+                        {justDone.idVerified ? ' · ID verified' : ''}
+                      </p>
+                    </div>
+                  </div>
+                  <Button variant="secondary" onClick={() => dismissCheckedIn(b.id)}>
+                    Done
+                  </Button>
+                </Card>
+              );
+            }
             const isSingleRoom = b.bookingRooms.length === 1;
             const notReady = isSingleRoom
               ? b.bookingRooms[0].room.status !== 'AVAILABLE' || assignedRoomOk[b.id] === false
@@ -259,11 +328,16 @@ export default function CheckinPage() {
             const canOfferAlt = notReady && isSingleRoom;
             const altOptions = altRooms[b.id];
             const altPicked = selectedAltRoom[b.id];
-            const canCheckIn = !notReady || (canOfferAlt && !!altPicked);
+            const idComplete = !!(idDocType[b.id]?.trim() && idDocNumber[b.id]?.trim() && idDocUrl[b.id]);
+            const canCheckIn = idComplete && (!notReady || (canOfferAlt && !!altPicked));
             const blockNote = !notReady ? roomBlockNote[b.id] : null;
             return (
               <Card key={b.id} className="flex flex-wrap items-center justify-between gap-4 p-5">
-                <div>
+                <div className="flex items-start gap-3">
+                  <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-xs font-bold text-brand-700">
+                    {initials(b.guest.fullName)}
+                  </span>
+                  <div>
                   <div className="flex items-center gap-1.5 font-medium text-slate-900">
                     {b.guest.fullName}
                     <GuestBadges guest={b.guest} />
@@ -289,6 +363,7 @@ export default function CheckinPage() {
                         : `Early check-in — waive the ${earlyFeeAmount} fee?`}
                     </label>
                   )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <div className="w-32">
@@ -304,7 +379,13 @@ export default function CheckinPage() {
                   <Button
                     onClick={() => handleCheckin(b)}
                     disabled={checkingInId === b.id || !canCheckIn}
-                    title={!canCheckIn ? (canOfferAlt ? 'Pick a room to check into' : 'Room is not marked available') : undefined}
+                    title={
+                      !idComplete
+                        ? "Upload the guest's ID document, type, and number to check in"
+                        : !canCheckIn
+                          ? (canOfferAlt ? 'Pick a room to check into' : 'Room is not marked available')
+                          : undefined
+                    }
                   >
                     {checkingInId === b.id ? 'Checking in…' : altPicked ? `Check In → Room ${altOptions?.find((r) => r.id === altPicked)?.roomNumber}` : 'Check In'}
                   </Button>
@@ -327,6 +408,7 @@ export default function CheckinPage() {
                       <Label htmlFor={`id-number-${b.id}`}>ID number</Label>
                       <Input
                         id={`id-number-${b.id}`}
+                        required
                         placeholder="Document number"
                         value={idDocNumber[b.id] ?? ''}
                         onChange={(e) => setIdDocNumber((prev) => ({ ...prev, [b.id]: e.target.value }))}
@@ -341,6 +423,45 @@ export default function CheckinPage() {
                       />
                       ID verified
                     </label>
+                  </div>
+                  <div>
+                    <Label htmlFor={`id-doc-${b.id}`}>
+                      ID document photo/scan {!idDocUrl[b.id] && <span className="text-rose-600">(required)</span>}
+                    </Label>
+                    <div className="flex items-center gap-3">
+                      {idDocUrl[b.id] ? (
+                        isIdDocumentPdf(idDocUrl[b.id]) ? (
+                          <a
+                            href={idDocUrl[b.id]}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 hover:text-brand-700"
+                          >
+                            <FileText className="h-5 w-5" />
+                          </a>
+                        ) : (
+                          <a href={idDocUrl[b.id]} target="_blank" rel="noreferrer" className="shrink-0">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={idDocUrl[b.id]} alt="ID document" className="h-12 w-12 rounded-lg border border-slate-200 object-cover" />
+                          </a>
+                        )
+                      ) : (
+                        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-dashed border-slate-300 text-slate-300">
+                          <Upload className="h-5 w-5" />
+                        </span>
+                      )}
+                      <label className="inline-flex cursor-pointer items-center rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                        {idDocUrl[b.id] ? 'Replace file' : 'Upload file'}
+                        <input
+                          id={`id-doc-${b.id}`}
+                          type="file"
+                          accept={ID_DOC_ACCEPT_ATTR}
+                          onChange={(e) => handleIdDocChange(b.id, e)}
+                          className="hidden"
+                        />
+                      </label>
+                      {docUploadError[b.id] && <span className="text-xs text-rose-600">{docUploadError[b.id]}</span>}
+                    </div>
                   </div>
                   {b.guest.idVerifiedAt && (
                     <p className="flex items-center gap-1 text-xs text-emerald-700">

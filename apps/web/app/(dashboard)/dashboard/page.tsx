@@ -50,7 +50,7 @@ interface DashboardSummary {
   // null for roles without finance visibility — the API omits the figures
   // entirely rather than sending them for the client to hide.
   revenue: { today: number; monthToDate: number } | null;
-  today: { arrivals: number; departures: number };
+  today: { arrivals: number; departures: number; occupancyPct: number };
   alerts: {
     roomsNotReadyForArrivals: { bookingId: string; guestName: string; roomNumber: string; roomStatus: string }[];
     overdueHousekeeping: {
@@ -75,6 +75,10 @@ function daysAgo(iso: string) {
 
 function money(n: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function guestInitials(name: string) {
+  return name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
 }
 
 const REVENUE_VISIBLE_KEY = 'hotelops_dashboard_revenue_visible';
@@ -209,8 +213,11 @@ export default function DashboardPage() {
   const today = todayInTimeZone(timezone);
   const arrivals = bookings.filter((b) => b.checkInDate.slice(0, 10) === today && b.status === 'CONFIRMED');
   const departures = bookings.filter((b) => b.checkOutDate.slice(0, 10) === today && b.status === 'CHECKED_IN');
-  const occupied = rooms.filter((r) => r.status === 'OCCUPIED').length;
-  const occupancyPct = rooms.length > 0 ? Math.round((occupied / rooms.length) * 100) : 0;
+  // Booked-for-today occupancy — same definition the trends chart's today
+  // point uses (rooms with an active booking covering today, not just rooms
+  // already checked in), computed once on the server so the two numbers
+  // can't drift apart. See DashboardService.getTodayOccupancyPct.
+  const occupancyPct = summary ? summary.today.occupancyPct : 0;
 
   const kpis = [
     { key: 'occupancy', label: 'Occupancy today', value: `${occupancyPct}%`, icon: PercentCircle, tint: 'bg-brand-50 text-brand-700' },
@@ -241,15 +248,15 @@ export default function DashboardPage() {
     <div>
       <PageHeader title="Dashboard" subtitle="Today's snapshot for this property." />
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3.5 md:grid-cols-3 lg:grid-cols-6">
         {kpis.map((kpi) => {
           const Icon = kpi.icon;
           const masked = kpi.sensitive && !revenueVisible;
           return (
-            <Card key={kpi.key} className="p-5">
-              <div className="mb-3 flex items-center justify-between">
-                <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${kpi.tint}`}>
-                  <Icon className="h-5 w-5" />
+            <Card key={kpi.key} className="p-4">
+              <div className="flex items-center justify-between">
+                <div className={`flex h-[30px] w-[30px] items-center justify-center rounded-lg ${kpi.tint}`}>
+                  <Icon className="h-4 w-4" />
                 </div>
                 {kpi.sensitive && (
                   <button
@@ -262,28 +269,29 @@ export default function DashboardPage() {
                   </button>
                 )}
               </div>
-              <div className="text-sm text-slate-500">{kpi.label}</div>
-              <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-900">
+              <div className="mt-3 text-[22px] font-bold tabular-nums tracking-tight text-slate-900">
                 {masked ? '••••••' : kpi.value}
               </div>
+              <div className="mt-0.5 text-[11.5px] text-slate-500">{kpi.label}</div>
             </Card>
           );
         })}
       </div>
 
       {alerts && (
-        <Card className="mt-6 p-5">
-          <div className="mb-3 flex items-center gap-2">
-            <div className={`flex h-9 w-9 items-center justify-center rounded-lg ${alertCount > 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
-              {alertCount > 0 ? <AlertTriangle className="h-5 w-5" /> : <CheckCircle2 className="h-5 w-5" />}
+        <Card className="mt-5 p-0">
+          <div className="flex items-center gap-2.5 border-b border-slate-100 px-5 py-4">
+            <div className={`flex h-6 w-6 items-center justify-center rounded-full ${alertCount > 0 ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'}`}>
+              {alertCount > 0 ? <AlertTriangle className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
             </div>
-            <div>
-              <h2 className="text-sm font-semibold text-slate-900">Alerts</h2>
-              <p className="text-xs text-slate-500">{alertCount > 0 ? `${alertCount} item${alertCount === 1 ? '' : 's'} need attention` : 'Nothing needs attention right now'}</p>
-            </div>
+            <h2 className="text-[14.5px] font-semibold text-slate-900">Needs Attention</h2>
+            {alertCount > 0 && (
+              <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[11px] font-bold text-rose-700">{alertCount}</span>
+            )}
+            {alertCount === 0 && <span className="text-xs text-slate-500">Nothing needs attention right now</span>}
           </div>
-
           {alertCount > 0 && (
+            <div className="px-5 py-4">
             <div className="grid gap-x-6 gap-y-4 md:grid-cols-3 md:divide-x md:divide-slate-100">
               {alerts.roomsNotReadyForArrivals.length > 0 && (
                 <div className="md:pl-6 first:md:pl-0">
@@ -402,6 +410,7 @@ export default function DashboardPage() {
                 </div>
               )}
             </div>
+            </div>
           )}
         </Card>
       )}
@@ -425,12 +434,17 @@ export default function DashboardPage() {
             ) : (
               <ul className="divide-y divide-slate-100">
                 {arrivals.map((b) => (
-                  <li key={b.id} className="flex items-center justify-between gap-2 py-2 text-sm">
-                    <span className="flex items-center gap-1.5 text-slate-700">
-                      {b.guest.fullName}
-                      <GuestBadges guest={b.guest} />
-                      <span className="text-slate-400">
-                        · Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+                  <li key={b.id} className="flex items-center gap-3 py-2.5">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-[10.5px] font-bold text-brand-700">
+                      {guestInitials(b.guest.fullName)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5 text-[13px] font-medium text-slate-900">
+                        {b.guest.fullName}
+                        <GuestBadges guest={b.guest} />
+                      </span>
+                      <span className="block text-[11.5px] text-slate-500">
+                        Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
                       </span>
                     </span>
                     <Link href="/checkin" className="shrink-0 text-slate-400 hover:text-brand-700" title="Check in">
@@ -455,12 +469,17 @@ export default function DashboardPage() {
             ) : (
               <ul className="divide-y divide-slate-100">
                 {departures.map((b) => (
-                  <li key={b.id} className="flex items-center justify-between gap-2 py-2 text-sm">
-                    <span className="flex items-center gap-1.5 text-slate-700">
-                      {b.guest.fullName}
-                      <GuestBadges guest={b.guest} />
-                      <span className="text-slate-400">
-                        · Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
+                  <li key={b.id} className="flex items-center gap-3 py-2.5">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-[10.5px] font-bold text-brand-700">
+                      {guestInitials(b.guest.fullName)}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center gap-1.5 text-[13px] font-medium text-slate-900">
+                        {b.guest.fullName}
+                        <GuestBadges guest={b.guest} />
+                      </span>
+                      <span className="block text-[11.5px] text-slate-500">
+                        Room {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
                       </span>
                     </span>
                     <Link href="/checkout" className="shrink-0 text-slate-400 hover:text-brand-700" title="Check out">

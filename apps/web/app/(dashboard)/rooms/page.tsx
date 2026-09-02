@@ -484,7 +484,7 @@ export default function RoomsPage() {
               <tbody className="divide-y divide-slate-100">
                 {visibleRooms.map((r) => (
                   <tr key={r.id} className="hover:bg-slate-50">
-                    <td className="px-5 py-3 font-medium text-slate-900">{r.roomNumber}</td>
+                    <td className="px-5 py-3 font-semibold tabular-nums text-slate-900">{r.roomNumber}</td>
                     <td className="px-5 py-3 text-slate-600">
                       {editingFloorId === r.id ? (
                         <div className="flex items-center gap-1.5">

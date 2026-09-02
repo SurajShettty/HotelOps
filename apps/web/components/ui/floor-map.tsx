@@ -264,21 +264,25 @@ export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: s
                 <StateBar counts={floorCounts} total={floorRooms.length} />
               </div>
 
-              <div className="flex flex-wrap gap-3">
+              <div className="flex flex-wrap gap-2.5">
                 {floorRooms.map((room) => {
                   const state = tileState(room, blockedRoomIds, reservedRoomIds);
                   const style = TILE_STYLES[state];
-                  const Icon = style.icon;
+                  const occupant = occupantByRoomId.get(room.id);
                   return (
                     <button
                       key={room.id}
                       type="button"
                       onMouseEnter={(e) => handleEnter(e, room)}
                       onMouseLeave={handleLeave}
-                      className={`flex h-20 w-20 flex-col items-center justify-center gap-1 rounded-xl border shadow-card transition-all hover:-translate-y-0.5 hover:shadow-popover ${style.tile}`}
+                      className={`flex w-32 flex-col items-start gap-0.5 rounded-xl border p-3 text-left shadow-card transition-all hover:-translate-y-0.5 hover:shadow-popover ${style.tile}`}
                     >
-                      <Icon className={`h-4 w-4 ${style.iconColor}`} />
-                      <span className="text-base font-semibold leading-none">{room.roomNumber}</span>
+                      <span className="flex w-full items-center justify-between">
+                        <span className="text-base font-bold leading-none tabular-nums">{room.roomNumber}</span>
+                        <span className={`h-[7px] w-[7px] shrink-0 rounded-full ${style.dot}`} />
+                      </span>
+                      <span className={`text-[10.5px] font-semibold ${style.iconColor}`}>{style.label}</span>
+                      {occupant && <span className="w-full truncate text-[10.5px] opacity-70">{occupant}</span>}
                     </button>
                   );
                 })}

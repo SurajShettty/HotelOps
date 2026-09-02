@@ -3,9 +3,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { todayDateOnlyInTimeZone, localTimeHHmm } from '../../common/date.util';
 import { AuditLogService, fieldDiff } from '../audit-logs/audit-log.service';
 import { AvailabilityService } from '../rooms/availability.service';
+import { ID_VERIFICATION_FIELDS } from '../guests/guests.service';
 import { CheckinDto } from './dto/checkin.dto';
-
-const ID_VERIFICATION_FIELDS = ['idDocumentType', 'idDocumentNumber', 'idVerifiedAt', 'idVerifiedById'] as const;
 
 @Injectable()
 export class CheckinService {
@@ -88,13 +87,17 @@ export class CheckinService {
         await tx.room.update({ where: { id: assignment.roomId }, data: { status: 'OCCUPIED' } });
       }
 
-      if (dto.idDocumentType !== undefined || dto.idDocumentNumber !== undefined || dto.idVerified !== undefined) {
+      // ID document type/number/photo are required by CheckinDto, so this
+      // always has something to write — either freshly captured this time or
+      // (reused, unchanged) the guest's existing document from a prior stay.
+      {
         const guestBefore = await tx.guest.findUniqueOrThrow({ where: { id: booking.guestId } });
         const guestAfter = await tx.guest.update({
           where: { id: booking.guestId },
           data: {
-            ...(dto.idDocumentType !== undefined ? { idDocumentType: dto.idDocumentType } : {}),
-            ...(dto.idDocumentNumber !== undefined ? { idDocumentNumber: dto.idDocumentNumber } : {}),
+            idDocumentType: dto.idDocumentType,
+            idDocumentNumber: dto.idDocumentNumber,
+            idDocumentUrl: dto.idDocumentUrl,
             ...(dto.idVerified
               ? { idVerifiedAt: new Date(), idVerifiedById: checkedInById }
               : dto.idVerified === false

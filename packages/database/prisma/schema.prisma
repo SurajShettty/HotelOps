@@ -254,6 +254,9 @@ model Guest {
   phone            String?
   idDocumentType   String?   @map("id_document_type")
   idDocumentNumber String?   @map("id_document_number")
+  // Data URL (e.g. "data:image/jpeg;base64,...") — same inline-storage
+  // pattern as Hotel.logoUrl; no object storage is wired up in this app.
+  idDocumentUrl    String?   @map("id_document_url") @db.Text
   idVerifiedAt     DateTime? @map("id_verified_at")
   idVerifiedById   String?   @map("id_verified_by")
   notes            String?

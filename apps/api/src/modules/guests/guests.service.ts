@@ -7,9 +7,14 @@ import { COUNTED_BOOKING_STATUSES, getGuestLoyaltyTier } from './guest-loyalty';
 import { CreateGuestDto } from './dto/create-guest.dto';
 import { UpdateGuestDto } from './dto/update-guest.dto';
 import { FlagGuestDto } from './dto/flag-guest.dto';
+import { VerifyGuestIdDto } from './dto/verify-guest-id.dto';
 
 const GUEST_FIELDS = ['fullName', 'email', 'phone', 'idDocumentType', 'idDocumentNumber', 'notes'] as const;
 const FLAG_FIELDS = ['isFlagged', 'flagReason', 'flaggedAt', 'flaggedById'] as const;
+// Shared with CheckinService, which is the other place these fields get
+// written — one field list so the audit diff for an 'ID_VERIFY' action is
+// identical regardless of which flow triggered it.
+export const ID_VERIFICATION_FIELDS = ['idDocumentType', 'idDocumentNumber', 'idDocumentUrl', 'idVerifiedAt', 'idVerifiedById'] as const;
 
 type GuestWithBookingsCount = Prisma.GuestGetPayload<{ include: { _count: { select: { bookings: true } } } }>;
 
@@ -65,7 +70,10 @@ export class GuestsService {
     const guest = await this.prisma.guest.findUnique({
       where: { id },
       include: {
-        bookings: { orderBy: { checkInDate: 'desc' } },
+        bookings: {
+          orderBy: { checkInDate: 'desc' },
+          include: { bookingRooms: { include: { room: { select: { roomNumber: true } } } } },
+        },
         _count: { select: { bookings: { where: { status: COUNTED_BOOKING_STATUSES } } } },
         flaggedBy: { select: { fullName: true } },
       },
@@ -135,6 +143,42 @@ export class GuestsService {
       entity: 'Guest',
       entityId: id,
       action: 'UNFLAG',
+      before: diff.before,
+      after: diff.after,
+    });
+    return this.findOneWithHistory(id);
+  }
+
+  /**
+   * Confirms the ID document on file for this guest — either what's already
+   * there (see the Bookings tab's verify popover, no body needed), or
+   * freshly captured in the same action when there's nothing on file yet
+   * (the popover's upload form, dto carries the new type/number/photo).
+   * Refuses if, after merging in whatever `dto` supplies, any of the three
+   * fields still isn't set — there's nothing to verify.
+   */
+  async verifyId(id: string, dto: VerifyGuestIdDto, staffId: string) {
+    const before = await this.prisma.guest.findUniqueOrThrow({ where: { id } });
+    const idDocumentType = dto.idDocumentType ?? before.idDocumentType;
+    const idDocumentNumber = dto.idDocumentNumber ?? before.idDocumentNumber;
+    const idDocumentUrl = dto.idDocumentUrl ?? before.idDocumentUrl;
+    if (!idDocumentType || !idDocumentNumber || !idDocumentUrl) {
+      throw new BadRequestException({
+        code: 'NO_ID_ON_FILE',
+        message: 'Enter the ID document type, number, and upload a photo/scan to verify.',
+      });
+    }
+    const after = await this.prisma.guest.update({
+      where: { id },
+      data: { idDocumentType, idDocumentNumber, idDocumentUrl, idVerifiedAt: new Date(), idVerifiedById: staffId },
+    });
+    const diff = fieldDiff(before, after, ID_VERIFICATION_FIELDS);
+    await this.auditLog.record(this.prisma, {
+      hotelId: after.hotelId,
+      actorId: staffId,
+      entity: 'Guest',
+      entityId: id,
+      action: 'ID_VERIFY',
       before: diff.before,
       after: diff.after,
     });

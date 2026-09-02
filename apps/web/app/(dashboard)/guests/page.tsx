@@ -9,10 +9,16 @@ import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader } from 
 import { Pagination } from '@/components/ui/pagination';
 import { GuestLoyaltyBadge, GuestLoyaltyTier } from '@/components/ui/guest-loyalty-badge';
 import { GuestFlagBadge } from '@/components/ui/guest-flag-badge';
+import { GuestVerifiedIcon } from '@/components/ui/guest-verified-icon';
+import { Anchor, VerifyIdPopover } from '@/components/ui/verify-id-popover';
 import { RequireRole } from '@/components/ui/require-role';
 import { RECEPTIONIST_AREA_ROLES } from '@/lib/roles';
 
 const PAGE_SIZE = 25;
+
+function initials(name: string) {
+  return name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+}
 
 interface Guest {
   id: string;
@@ -24,6 +30,10 @@ interface Guest {
   loyaltyBadge: { tier: GuestLoyaltyTier; label: string } | null;
   isFlagged: boolean;
   flagReason: string | null;
+  idDocumentType: string | null;
+  idDocumentNumber: string | null;
+  idDocumentUrl: string | null;
+  idVerifiedAt: string | null;
 }
 
 export default function GuestsPage() {
@@ -41,6 +51,7 @@ export default function GuestsPage() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [verifyPopover, setVerifyPopover] = useState<{ guest: Guest; anchor: Anchor } | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -165,23 +176,46 @@ export default function GuestsPage() {
               {guests.map((g) => (
                 <tr key={g.id} className="hover:bg-slate-50">
                   <td className="px-5 py-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-50 text-[10.5px] font-bold text-brand-700">
+                        {initials(g.fullName)}
+                      </span>
                       <Link href={`/guests/${g.id}`} className="font-medium text-brand-700 hover:underline">
                         {g.fullName}
                       </Link>
                       <GuestLoyaltyBadge badge={g.loyaltyBadge} />
                       <GuestFlagBadge isFlagged={g.isFlagged} flagReason={g.flagReason} />
+                      <GuestVerifiedIcon
+                        verifiedAt={g.idVerifiedAt}
+                        onClick={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setVerifyPopover({ guest: g, anchor: { top: rect.bottom + 4, left: rect.left } });
+                        }}
+                      />
                     </div>
                   </td>
                   <td className="px-5 py-3 text-slate-600">{g.email ?? '—'}</td>
                   <td className="px-5 py-3 text-slate-600">{g.phone ?? '—'}</td>
-                  <td className="px-5 py-3 text-slate-600">{g.bookingsCount}</td>
+                  <td className="px-5 py-3 tabular-nums text-slate-600">{g.bookingsCount}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           <Pagination page={page} pageSize={PAGE_SIZE} total={total} onPageChange={setPage} />
         </Card>
+      )}
+
+      {verifyPopover && hotelId && (
+        <VerifyIdPopover
+          hotelId={hotelId}
+          guest={verifyPopover.guest}
+          anchor={verifyPopover.anchor}
+          onClose={() => setVerifyPopover(null)}
+          onVerified={() => {
+            setVerifyPopover(null);
+            reload();
+          }}
+        />
       )}
     </div>
     </RequireRole>

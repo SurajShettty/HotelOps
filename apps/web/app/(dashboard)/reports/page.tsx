@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { BarChart3 } from 'lucide-react';
+import { BarChart3, BedDouble, FileText, Percent, Receipt, Wallet } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { HOUSEKEEPING_AREA_ROLES, NON_HOUSEKEEPING_ROLES, hasAnyRole, roleAtHotel, useRoleGrants } from '@/lib/roles';
@@ -170,14 +170,28 @@ function ReportBody({
         grandTotal: string;
       }>;
     };
+    const statCards: { key: string; label: string; value: string | number; icon: React.ComponentType<{ className?: string }>; tint: string }[] = [
+      { key: 'rooms', label: 'Total rooms', value: occupancy.totalRooms, icon: BedDouble, tint: 'bg-brand-50 text-brand-700' },
+      { key: 'roomNights', label: 'Booked room-nights', value: occupancy.bookedRoomNights, icon: BarChart3, tint: 'bg-sky-50 text-sky-700' },
+      { key: 'invoices', label: 'Invoices', value: revenue.invoiceCount, icon: Receipt, tint: 'bg-violet-50 text-violet-700' },
+      { key: 'revenue', label: 'Total revenue', value: revenue.totalRevenue, icon: Wallet, tint: 'bg-gold-50 text-gold-700' },
+      { key: 'tax', label: 'Total tax', value: revenue.totalTax, icon: Percent, tint: 'bg-emerald-50 text-emerald-700' },
+    ];
     return (
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-5">
-          <Card className="p-5"><div className="text-sm text-slate-500">Total rooms</div><div className="mt-1 text-2xl font-semibold">{occupancy.totalRooms}</div></Card>
-          <Card className="p-5"><div className="text-sm text-slate-500">Booked room-nights</div><div className="mt-1 text-2xl font-semibold">{occupancy.bookedRoomNights}</div></Card>
-          <Card className="p-5"><div className="text-sm text-slate-500">Invoices</div><div className="mt-1 text-2xl font-semibold">{revenue.invoiceCount}</div></Card>
-          <Card className="p-5"><div className="text-sm text-slate-500">Total revenue</div><div className="mt-1 text-2xl font-semibold">{revenue.totalRevenue}</div></Card>
-          <Card className="p-5"><div className="text-sm text-slate-500">Total tax</div><div className="mt-1 text-2xl font-semibold">{revenue.totalTax}</div></Card>
+        <div className="grid grid-cols-2 gap-3.5 sm:grid-cols-5">
+          {statCards.map((s) => {
+            const Icon = s.icon;
+            return (
+              <Card key={s.key} className="p-4">
+                <div className={`flex h-[30px] w-[30px] items-center justify-center rounded-lg ${s.tint}`}>
+                  <Icon className="h-4 w-4" />
+                </div>
+                <div className="mt-3 text-[22px] font-bold tabular-nums tracking-tight text-slate-900">{s.value}</div>
+                <div className="mt-0.5 text-[11.5px] text-slate-500">{s.label}</div>
+              </Card>
+            );
+          })}
         </div>
 
         {detailed.items.length === 0 ? (
@@ -202,14 +216,14 @@ function ReportBody({
                 {detailed.items.map((r) => (
                   <tr key={r.invoiceId}>
                     <td className="px-5 py-3 font-medium text-slate-900">{r.guestName}</td>
-                    <td className="px-5 py-3 text-slate-600">{r.roomNumbers.join(', ')}</td>
+                    <td className="px-5 py-3 tabular-nums text-slate-600">{r.roomNumbers.join(', ')}</td>
                     <td className="px-5 py-3 text-slate-600">{r.issuedAt.slice(0, 10)}</td>
-                    <td className="px-5 py-3 text-slate-600">{r.nights}</td>
-                    <td className="px-5 py-3 text-slate-600">{r.roomSubtotal}</td>
-                    <td className="px-5 py-3 text-slate-600">{r.chargesTotal}</td>
-                    <td className="px-5 py-3 text-slate-600">{r.discountTotal}</td>
-                    <td className="px-5 py-3 text-slate-600">{r.taxTotal}</td>
-                    <td className="px-5 py-3 font-medium text-slate-900">{r.grandTotal}</td>
+                    <td className="px-5 py-3 tabular-nums text-slate-600">{r.nights}</td>
+                    <td className="px-5 py-3 tabular-nums text-slate-600">{r.roomSubtotal}</td>
+                    <td className="px-5 py-3 tabular-nums text-slate-600">{r.chargesTotal}</td>
+                    <td className="px-5 py-3 tabular-nums text-slate-600">{r.discountTotal}</td>
+                    <td className="px-5 py-3 tabular-nums text-slate-600">{r.taxTotal}</td>
+                    <td className="px-5 py-3 tabular-nums font-medium text-slate-900">{r.grandTotal}</td>
                   </tr>
                 ))}
               </tbody>
@@ -239,9 +253,9 @@ function ReportBody({
           {rows.map((r) => (
             <tr key={r.staffId ?? 'unassigned'}>
               <td className={`px-5 py-3 font-medium ${r.staffId ? 'text-slate-900' : 'text-slate-400'}`}>{r.staffName}</td>
-              <td className="px-5 py-3 text-slate-600">{r.totalTasks}</td>
-              <td className="px-5 py-3 text-slate-600">{r.completedTasks}</td>
-              <td className="px-5 py-3 text-slate-600">
+              <td className="px-5 py-3 tabular-nums text-slate-600">{r.totalTasks}</td>
+              <td className="px-5 py-3 tabular-nums text-slate-600">{r.completedTasks}</td>
+              <td className="px-5 py-3 tabular-nums text-slate-600">
                 {r.avgCompletionMinutes === null ? '—' : `${Math.floor(r.avgCompletionMinutes / 60)}h ${r.avgCompletionMinutes % 60}m`}
               </td>
             </tr>

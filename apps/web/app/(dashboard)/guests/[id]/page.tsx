@@ -17,6 +17,7 @@ interface Booking {
   status: string;
   checkInDate: string;
   checkOutDate: string;
+  bookingRooms: { room: { roomNumber: string } }[];
 }
 
 interface GuestDetail {
@@ -142,6 +143,7 @@ export default function GuestDetailPage() {
             <table className="w-full text-sm">
               <thead className="border-b border-slate-100 text-left text-xs font-medium uppercase tracking-wide text-slate-400">
                 <tr>
+                  <th className="py-2 pr-3">Room</th>
                   <th className="py-2 pr-3">Check-in</th>
                   <th className="py-2 pr-3">Check-out</th>
                   <th className="py-2 pr-3">Status</th>
@@ -150,6 +152,7 @@ export default function GuestDetailPage() {
               <tbody className="divide-y divide-slate-100">
                 {guest.bookings.map((b) => (
                   <tr key={b.id}>
+                    <td className="py-2 pr-3 tabular-nums text-slate-600">{b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}</td>
                     <td className="py-2 pr-3 text-slate-600">{b.checkInDate.slice(0, 10)}</td>
                     <td className="py-2 pr-3 text-slate-600">{b.checkOutDate.slice(0, 10)}</td>
                     <td className="py-2 pr-3"><StatusBadge status={b.status} /></td>

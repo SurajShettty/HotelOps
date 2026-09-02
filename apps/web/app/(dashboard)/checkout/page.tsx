@@ -64,6 +64,10 @@ function money(n: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function initials(name: string) {
+  return name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
+}
+
 function FolioSummary({
   folio,
   loading,
@@ -102,7 +106,7 @@ function FolioSummary({
           )}
           <div className="flex justify-between py-0.5 text-slate-600">
             <span>Room ({folio.nights} night{folio.nights === 1 ? '' : 's'})</span>
-            <span>{money(folio.roomSubtotal)}</span>
+            <span className="tabular-nums">{money(folio.roomSubtotal)}</span>
           </div>
           {folio.chargesTotal > 0 && (
             <div className="flex justify-between py-0.5 text-slate-600">
@@ -128,7 +132,7 @@ function FolioSummary({
           </div>
           <div className="mt-1.5 flex justify-between border-t border-slate-200 pt-1.5 font-medium text-slate-900">
             <span>Grand total</span>
-            <span>{money(folio.grandTotal)}</span>
+            <span className="tabular-nums">{money(folio.grandTotal)}</span>
           </div>
           {folio.alreadyPaid > 0 && (
             <div className="flex justify-between py-0.5 text-slate-600">
@@ -139,12 +143,12 @@ function FolioSummary({
           {folio.refundDue > 0 ? (
             <div className="mt-1.5 flex justify-between border-t border-slate-200 pt-1.5 text-base font-semibold text-amber-700">
               <span>Refund due to guest</span>
-              <span>{money(folio.refundDue)}</span>
+              <span className="tabular-nums">{money(folio.refundDue)}</span>
             </div>
           ) : (
             <div className="mt-1.5 flex justify-between border-t border-slate-200 pt-1.5 text-base font-semibold text-brand-800">
               <span>Amount to be paid</span>
-              <span>{money(folio.balanceDue)}</span>
+              <span className="tabular-nums">{money(folio.balanceDue)}</span>
             </div>
           )}
         </div>
@@ -642,7 +646,11 @@ export default function CheckoutPage() {
             return (
               <div key={b.id}>
                 <Card className="flex flex-wrap items-center justify-between gap-4 p-5">
-                  <div>
+                  <div className="flex items-start gap-3">
+                    <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-xs font-bold text-brand-700">
+                      {initials(b.guest.fullName)}
+                    </span>
+                    <div>
                     <div className="flex items-center gap-1.5 font-medium text-slate-900">
                       {b.guest.fullName}
                       <GuestBadges guest={b.guest} />
@@ -656,12 +664,13 @@ export default function CheckoutPage() {
                       {b.checkInDate.slice(0, 10)} → {b.checkOutDate.slice(0, 10)} · Room{' '}
                       {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
                     </div>
+                    </div>
                   </div>
                   <div className="flex items-center gap-3">
                     {dueAmounts[b.id] !== undefined && activeId !== b.id && (
                       <div className="text-right">
                         <div className="text-xs text-slate-400">Total payable</div>
-                        <div className="text-sm font-semibold text-slate-900">{money(dueAmounts[b.id])}</div>
+                        <div className="text-sm font-semibold tabular-nums text-slate-900">{money(dueAmounts[b.id])}</div>
                       </div>
                     )}
                     <Button

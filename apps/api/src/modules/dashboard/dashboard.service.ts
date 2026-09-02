@@ -37,6 +37,7 @@ export class DashboardService {
       overstays,
       arrivalsToday,
       departuresToday,
+      occupancyPct,
     ] = await Promise.all([
       includeRevenue ? this.netRevenue(hotelId, todayStart, tomorrowStart) : Promise.resolve(null),
       includeRevenue ? this.netRevenue(hotelId, monthStart, tomorrowStart) : Promise.resolve(null),
@@ -47,13 +48,35 @@ export class DashboardService {
       this.getOverstays(hotel, now, todayStart, tomorrowStart),
       this.getArrivalsCompletedToday(hotelId, todayStart, tomorrowStart),
       this.getDeparturesCompletedToday(hotelId, todayStart, tomorrowStart),
+      this.getTodayOccupancyPct(hotelId, todayStart, tomorrowStart),
     ]);
 
     return {
       revenue: includeRevenue ? { today: revenueToday, monthToDate: revenueMonthToDate } : null,
-      today: { arrivals: arrivalsToday, departures: departuresToday },
+      today: { arrivals: arrivalsToday, departures: departuresToday, occupancyPct },
       alerts: { roomsNotReadyForArrivals, overdueHousekeeping, roomsOutOfService, noShows, overstays },
     };
+  }
+
+  // Same "booked for today" definition as getTrends' today bucket (see
+  // occupiesRoomToday below) — kept as the one place both the live dashboard
+  // KPI and the trend chart's today point get their number from, so the two
+  // can never silently drift apart the way a duplicated calculation would.
+  private async getTodayOccupancyPct(hotelId: string, todayStart: Date, tomorrowStart: Date): Promise<number> {
+    const [totalRooms, bookings] = await Promise.all([
+      this.prisma.room.count({ where: { hotelId } }),
+      this.prisma.booking.findMany({
+        where: {
+          hotelId,
+          status: { notIn: ['CANCELLED', 'NO_SHOW', 'DRAFT'] },
+          checkInDate: { lt: tomorrowStart },
+          checkOutDate: { gt: todayStart },
+        },
+        select: { status: true, checkInDate: true, checkOutDate: true, bookingRooms: { select: { roomId: true } } },
+      }),
+    ]);
+    const occupiedRoomIds = this.computeOccupiedRoomIds(bookings, todayStart, true);
+    return totalRooms > 0 ? Math.round((occupiedRoomIds.size / totalRooms) * 100) : 0;
   }
 
   // Payments (not invoices) are the actual cash ledger — they're recorded at
@@ -263,12 +286,7 @@ export class DashboardService {
 
     const dayRows = dayStarts.map((d, i) => {
       const isToday = d.getTime() === todayStart.getTime();
-      const occupiedRoomIds = new Set<string>();
-      for (const b of activeBookings) {
-        const covers = isToday ? this.occupiesRoomToday(b, d) : b.checkInDate <= d && b.checkOutDate > d;
-        if (!covers) continue;
-        for (const br of b.bookingRooms) occupiedRoomIds.add(br.roomId);
-      }
+      const occupiedRoomIds = this.computeOccupiedRoomIds(activeBookings, d, isToday);
       return {
         date: d.toISOString().slice(0, 10),
         revenue: revenueByDay[i],
@@ -298,5 +316,20 @@ export class DashboardService {
     if (b.status === 'CHECKED_OUT' || b.status === 'COMPLETED') return false;
     if (b.status === 'CHECKED_IN') return b.checkInDate <= today;
     return b.checkInDate <= today && b.checkOutDate > today;
+  }
+
+  /** Room ids occupied on `day` by `bookings` — `occupiesRoomToday`'s real-status test for today, plain date-range membership for any other day. */
+  private computeOccupiedRoomIds(
+    bookings: { status: string; checkInDate: Date; checkOutDate: Date; bookingRooms: { roomId: string }[] }[],
+    day: Date,
+    isToday: boolean,
+  ): Set<string> {
+    const occupiedRoomIds = new Set<string>();
+    for (const b of bookings) {
+      const covers = isToday ? this.occupiesRoomToday(b, day) : b.checkInDate <= day && b.checkOutDate > day;
+      if (!covers) continue;
+      for (const br of b.bookingRooms) occupiedRoomIds.add(br.roomId);
+    }
+    return occupiedRoomIds;
   }
 }

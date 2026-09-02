@@ -149,7 +149,7 @@ export default function HousekeepingPage() {
                           }`}
                         >
                           <div className="flex items-center justify-between">
-                            <span className="text-sm font-medium text-slate-900">Room {t.room.roomNumber}</span>
+                            <span className="text-sm font-medium tabular-nums text-slate-900">Room {t.room.roomNumber}</span>
                             {t.priority > 0 && (
                               <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">Priority</span>
                             )}

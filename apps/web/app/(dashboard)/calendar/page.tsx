@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Ban, CalendarPlus, ChevronLeft, ChevronRight, LogIn } from 'lucide-react';
+import { Ban, CalendarPlus, ChevronLeft, ChevronRight, FileText, LogIn, Upload } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
@@ -11,6 +11,7 @@ import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 import { GuestPicker, PickedGuest } from '@/components/ui/guest-picker';
 import { RequireRole } from '@/components/ui/require-role';
 import { NON_HOUSEKEEPING_ROLES } from '@/lib/roles';
+import { ID_DOC_ACCEPT_ATTR, ID_DOCUMENT_TYPES, isIdDocumentPdf, readIdDocumentFile } from '@/lib/id-document';
 
 const DAYS_SHOWN = 14;
 
@@ -30,7 +31,7 @@ const HOVER_PREVIEW_SIZE = { width: 288, height: 200 };
 const CELL_ACTION_POPOVER_SIZE = { width: 256, height: 160 };
 const MENU_POPOVER_SIZE = { width: 208, height: 190 };
 const BLOCK_FORM_SIZE = { width: 256, height: 230 };
-const RESERVE_FORM_SIZE = { width: 320, height: 440 };
+const RESERVE_FORM_SIZE = { width: 320, height: 560 };
 
 function clampTop(bottom: number, gap: number, height: number) {
   return Math.max(POPOVER_MARGIN, Math.min(bottom + gap, window.innerHeight - height - POPOVER_MARGIN));
@@ -247,8 +248,25 @@ function ReserveOrCheckinForm({
   const [deposit, setDeposit] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Required to check in (see CheckinDto) — a walk-in has no prior booking to
+  // have captured these on, so this is always a fresh capture, unlike the
+  // Check-In tab which can reuse what's already on the guest's record.
+  const [idDocType, setIdDocType] = useState(ID_DOCUMENT_TYPES[0]);
+  const [idDocNumber, setIdDocNumber] = useState('');
+  const [idDocUrl, setIdDocUrl] = useState('');
+  const [docUploadError, setDocUploadError] = useState('');
 
   const overCapacity = Number(occupants) > room.roomType.maxOccupancy;
+
+  function handleIdDocChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setDocUploadError('');
+    readIdDocumentFile(file)
+      .then(setIdDocUrl)
+      .catch((err: Error) => setDocUploadError(err.message));
+  }
 
   // Suggest a rate from active pricing rules once a check-out date is set —
   // same "instant base-rate fallback, then refine" pattern as the Bookings
@@ -291,6 +309,10 @@ function ReserveOrCheckinForm({
       setError(`This room sleeps a maximum of ${room.roomType.maxOccupancy}`);
       return;
     }
+    if (mode === 'checkin' && (!idDocType.trim() || !idDocNumber.trim() || !idDocUrl)) {
+      setError("Enter the guest's ID document type, number, and upload a photo/scan to check in");
+      return;
+    }
     setSubmitting(true);
     try {
       const guestId =
@@ -326,6 +348,9 @@ function ReserveOrCheckinForm({
             bookingId: booking.id,
             roomAssignments: booking.bookingRooms.map((br) => ({ bookingRoomId: br.id, roomId: br.roomId })),
             ...(deposit ? { depositAmount: Number(deposit) } : {}),
+            idDocumentType: idDocType,
+            idDocumentNumber: idDocNumber,
+            idDocumentUrl: idDocUrl,
           }),
         });
       }
@@ -371,6 +396,64 @@ function ReserveOrCheckinForm({
         </div>
         {overCapacity && <p className="text-xs text-rose-600">Sleeps a maximum of {room.roomType.maxOccupancy}.</p>}
 
+        {mode === 'checkin' && (
+          <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label htmlFor="cell-id-type">ID document type</Label>
+                <Select id="cell-id-type" value={idDocType} onChange={(e) => setIdDocType(e.target.value)} className="text-sm">
+                  {ID_DOCUMENT_TYPES.map((t) => (
+                    <option key={t} value={t}>{t}</option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="cell-id-number">ID number</Label>
+                <Input
+                  id="cell-id-number"
+                  placeholder="Document number"
+                  value={idDocNumber}
+                  onChange={(e) => setIdDocNumber(e.target.value)}
+                  className="text-sm"
+                />
+              </div>
+            </div>
+            <div>
+              <Label htmlFor="cell-id-doc">
+                ID document photo/scan {!idDocUrl && <span className="text-rose-600">(required)</span>}
+              </Label>
+              <div className="flex items-center gap-2">
+                {idDocUrl ? (
+                  isIdDocumentPdf(idDocUrl) ? (
+                    <a
+                      href={idDocUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 hover:text-brand-700"
+                    >
+                      <FileText className="h-4 w-4" />
+                    </a>
+                  ) : (
+                    <a href={idDocUrl} target="_blank" rel="noreferrer" className="shrink-0">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={idDocUrl} alt="ID document" className="h-9 w-9 rounded-lg border border-slate-200 object-cover" />
+                    </a>
+                  )
+                ) : (
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-slate-300 text-slate-300">
+                    <Upload className="h-4 w-4" />
+                  </span>
+                )}
+                <label className="inline-flex cursor-pointer items-center rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                  {idDocUrl ? 'Replace' : 'Upload'}
+                  <input id="cell-id-doc" type="file" accept={ID_DOC_ACCEPT_ATTR} onChange={handleIdDocChange} className="hidden" />
+                </label>
+                {docUploadError && <span className="text-xs text-rose-600">{docUploadError}</span>}
+              </div>
+            </div>
+          </div>
+        )}
+
         <div>
           <Label htmlFor="cell-rate">Rate/night</Label>
           <Input
@@ -397,7 +480,12 @@ function ReserveOrCheckinForm({
         </div>
 
         <div className="flex items-center gap-2">
-          <Button type="submit" disabled={submitting} className="px-3 py-1.5 text-xs">
+          <Button
+            type="submit"
+            disabled={submitting || (mode === 'checkin' && (!idDocType.trim() || !idDocNumber.trim() || !idDocUrl))}
+            title={mode === 'checkin' && (!idDocType.trim() || !idDocNumber.trim() || !idDocUrl) ? "Upload the guest's ID document, type, and number to check in" : undefined}
+            className="px-3 py-1.5 text-xs"
+          >
             {submitting ? (mode === 'checkin' ? 'Checking in…' : 'Reserving…') : mode === 'checkin' ? 'Check In' : 'Reserve'}
           </Button>
           <button type="button" onClick={onCancel} className="text-xs text-slate-400 hover:text-slate-700">Back</button>
@@ -899,7 +987,7 @@ export default function CalendarPage() {
             <tbody>
               {rooms.map((room) => (
                 <tr key={room.id}>
-                  <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-white px-4 py-2.5 font-medium text-slate-900">
+                  <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-white px-4 py-2.5 font-medium tabular-nums text-slate-900">
                     <span className="flex items-center gap-2">
                       <span
                         title={room.roomType.name}

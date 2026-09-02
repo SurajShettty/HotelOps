@@ -291,7 +291,7 @@ export default function AvailabilityPage() {
                   </p>
                 </div>
                 <span
-                  className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${
+                  className={`rounded-full px-2.5 py-1 text-xs font-medium tabular-nums ring-1 ring-inset ${
                     availableOfType.length > 0
                       ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
                       : 'bg-rose-50 text-rose-700 ring-rose-200'

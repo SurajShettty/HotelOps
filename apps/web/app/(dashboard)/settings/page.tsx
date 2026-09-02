@@ -844,7 +844,7 @@ function PricingRulesCard({ isOpen, onToggle }: { isOpen: boolean; onToggle: () 
               <div className={`min-w-0 flex-1 ${rule.active ? '' : 'opacity-50'}`}>
                 <div className="flex items-center gap-2">
                   <span className="truncate text-sm font-medium text-slate-900">{rule.name}</span>
-                  <span className="shrink-0 rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium text-brand-700">{ruleAdjustmentLabel(rule)}</span>
+                  <span className="shrink-0 rounded-full bg-brand-50 px-2 py-0.5 text-xs font-medium tabular-nums text-brand-700">{ruleAdjustmentLabel(rule)}</span>
                   {!rule.active && <span className="shrink-0 text-xs text-slate-400">Inactive</span>}
                 </div>
                 <p className="mt-0.5 truncate text-xs text-slate-500">{ruleScopeLabel(rule)} · {ruleWhenLabel(rule)}</p>
@@ -887,11 +887,11 @@ function PricingRulesCard({ isOpen, onToggle }: { isOpen: boolean; onToggle: () 
               <p className="pb-2 text-sm text-slate-400">Calculating…</p>
             ) : quote ? (
               <div className="pb-1 text-sm">
-                <span className="text-slate-500">{money(quote.baseRate)} base</span>
+                <span className="tabular-nums text-slate-500">{money(quote.baseRate)} base</span>
                 {quote.appliedRules.length > 0 && (
                   <>
                     <span className="mx-1.5 text-slate-300">→</span>
-                    <span className="font-medium text-brand-800">{money(quote.adjustedRate)}</span>
+                    <span className="tabular-nums font-medium text-brand-800">{money(quote.adjustedRate)}</span>
                     <span className="ml-1 text-xs text-slate-400">({quote.appliedRules.map((r) => r.name).join(', ')})</span>
                   </>
                 )}

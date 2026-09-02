@@ -5,6 +5,7 @@ import { GuestsService } from './guests.service';
 import { CreateGuestDto } from './dto/create-guest.dto';
 import { UpdateGuestDto } from './dto/update-guest.dto';
 import { FlagGuestDto } from './dto/flag-guest.dto';
+import { VerifyGuestIdDto } from './dto/verify-guest-id.dto';
 
 @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
 @Controller('guests')
@@ -44,5 +45,10 @@ export class GuestsController {
   @Post(':id/unflag')
   unflag(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
     return this.guestsService.unflag(id, user.id);
+  }
+
+  @Post(':id/verify-id')
+  verifyId(@Param('id') id: string, @Body() dto: VerifyGuestIdDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.guestsService.verifyId(id, dto, user.id);
   }
 }
