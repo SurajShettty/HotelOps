@@ -43,6 +43,7 @@ export class AuditLogsService {
       'Guest:UPDATE': (id, diff) => this.guests.restoreFields(id, diff.before ?? {}),
       'Guest:FLAG': (id, diff) => this.guests.restoreFields(id, diff.before ?? {}),
       'Guest:UNFLAG': (id, diff) => this.guests.restoreFields(id, diff.before ?? {}),
+      'Guest:ID_VERIFY': (id, diff) => this.guests.restoreFields(id, diff.before ?? {}),
 
       'Room:CREATE': (id) => this.rooms.removeIfUnreferenced(id),
       'Room:STATUS_CHANGE': (id, diff) => this.rooms.restoreFields(id, diff.before ?? {}),

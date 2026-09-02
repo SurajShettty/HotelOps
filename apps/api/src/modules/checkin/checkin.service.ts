@@ -1,9 +1,11 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { todayDateOnlyInTimeZone, localTimeHHmm } from '../../common/date.util';
-import { AuditLogService } from '../audit-logs/audit-log.service';
+import { AuditLogService, fieldDiff } from '../audit-logs/audit-log.service';
 import { AvailabilityService } from '../rooms/availability.service';
 import { CheckinDto } from './dto/checkin.dto';
+
+const ID_VERIFICATION_FIELDS = ['idDocumentType', 'idDocumentNumber', 'idVerifiedAt', 'idVerifiedById'] as const;
 
 @Injectable()
 export class CheckinService {
@@ -40,17 +42,37 @@ export class CheckinService {
       }
 
       // An early arrival widens the reserved range back from the booked
-      // checkInDate to today, which can now overlap another booking that
-      // legitimately grabbed this room in between — re-check availability
-      // for the actual range before committing, same as bookings.service's
-      // extend(). Without this the DB's exclusion constraint still catches
-      // it, but as an unhandled 500 instead of a friendly conflict.
-      await this.availabilityService.assertRoomsAvailable(tx, {
-        roomIds: dto.roomAssignments.map((a) => a.roomId),
-        checkIn: checkInDate,
-        checkOut: booking.checkOutDate,
-        excludeBookingId: dto.bookingId,
-      });
+      // checkInDate to today, which can now overlap something else on the
+      // calendar for this room. A conflicting BOOKING is a real
+      // double-booking — Postgres's own EXCLUDE constraint on booking_rooms
+      // would refuse it regardless, so this still fails fast with a
+      // friendly error. A conflicting room BLOCK (VIP hold, maintenance,
+      // etc.) has no such cross-table constraint against bookings, and is
+      // just an operational hold — the room is genuinely free to check into
+      // right now, so front desk can go ahead and plan to move the guest
+      // before the block starts. That's only true if the block doesn't
+      // cover the check-in day itself, in which case the room can't be
+      // occupied at all yet and it's a hard block like any other.
+      const roomBlockWarnings: { roomId: string; blockStartDate: string; reason: string }[] = [];
+      for (const assignment of dto.roomAssignments) {
+        const conflict = await this.availabilityService.findRoomConflict(
+          { roomId: assignment.roomId, checkIn: checkInDate, checkOut: booking.checkOutDate, excludeBookingId: dto.bookingId },
+          tx,
+        );
+        if (conflict.bookingConflict) {
+          throw new ConflictException({ code: 'ROOM_UNAVAILABLE', message: 'One or more rooms are already booked for part of this stay.' });
+        }
+        if (conflict.block) {
+          if (conflict.block.startDate <= checkInDate) {
+            throw new ConflictException({ code: 'ROOM_UNAVAILABLE', message: 'One or more rooms are blocked for the requested dates.' });
+          }
+          roomBlockWarnings.push({
+            roomId: assignment.roomId,
+            blockStartDate: conflict.block.startDate.toISOString().slice(0, 10),
+            reason: conflict.block.reason,
+          });
+        }
+      }
 
       for (const assignment of dto.roomAssignments) {
         const room = await tx.room.findUnique({
@@ -64,6 +86,32 @@ export class CheckinService {
 
         await tx.bookingRoom.update({ where: { id: assignment.bookingRoomId }, data: { roomId: assignment.roomId } });
         await tx.room.update({ where: { id: assignment.roomId }, data: { status: 'OCCUPIED' } });
+      }
+
+      if (dto.idDocumentType !== undefined || dto.idDocumentNumber !== undefined || dto.idVerified !== undefined) {
+        const guestBefore = await tx.guest.findUniqueOrThrow({ where: { id: booking.guestId } });
+        const guestAfter = await tx.guest.update({
+          where: { id: booking.guestId },
+          data: {
+            ...(dto.idDocumentType !== undefined ? { idDocumentType: dto.idDocumentType } : {}),
+            ...(dto.idDocumentNumber !== undefined ? { idDocumentNumber: dto.idDocumentNumber } : {}),
+            ...(dto.idVerified
+              ? { idVerifiedAt: new Date(), idVerifiedById: checkedInById }
+              : dto.idVerified === false
+                ? { idVerifiedAt: null, idVerifiedById: null }
+                : {}),
+          },
+        });
+        const guestDiff = fieldDiff(guestBefore, guestAfter, ID_VERIFICATION_FIELDS);
+        await this.auditLog.record(tx, {
+          hotelId: booking.hotelId,
+          actorId: checkedInById,
+          entity: 'Guest',
+          entityId: booking.guestId,
+          action: 'ID_VERIFY',
+          before: guestDiff.before,
+          after: guestDiff.after,
+        });
       }
 
       if (dto.depositAmount) {
@@ -103,7 +151,7 @@ export class CheckinService {
         after: { status: updated.status, checkInDate: updated.checkInDate.toISOString().slice(0, 10) },
       });
 
-      return updated;
+      return { ...updated, roomBlockWarnings };
     });
   }
 }

@@ -4,6 +4,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { RoomsService } from './rooms.service';
 import { AvailabilityService } from './availability.service';
 import { AvailabilityQueryDto } from './dto/availability-query.dto';
+import { RoomConflictQueryDto } from './dto/room-conflict-query.dto';
 
 @Controller('rooms')
 export class RoomsController {
@@ -32,6 +33,19 @@ export class RoomsController {
       excludeBookingId: query.excludeBookingId,
     });
     return { availableRooms };
+  }
+
+  // Per-room detail behind the coarse availableRooms list above — lets the
+  // check-in flow tell a real double-booking apart from a later room block
+  // it can safely check the guest into now and work around before it starts.
+  @Get(':id/conflict')
+  conflict(@Param('id') id: string, @Query() query: RoomConflictQueryDto) {
+    return this.availabilityService.findRoomConflict({
+      roomId: id,
+      checkIn: new Date(query.checkIn),
+      checkOut: new Date(query.checkOut),
+      excludeBookingId: query.excludeBookingId,
+    });
   }
 
   @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')

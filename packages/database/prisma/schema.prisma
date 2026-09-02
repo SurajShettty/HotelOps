@@ -145,6 +145,7 @@ model User {
   auditLogs         AuditLog[]
   auditLogsReverted AuditLog[]         @relation("AuditLogRevertedBy")
   guestsFlagged     Guest[]            @relation("GuestFlaggedBy")
+  guestsIdVerified  Guest[]            @relation("GuestIdVerifiedBy")
   roomChargesAdded  RoomCharge[]
   roomChangesMade   RoomChangeLog[]
   housekeepingFloorAssignments HousekeepingFloorAssignment[]
@@ -253,6 +254,8 @@ model Guest {
   phone            String?
   idDocumentType   String?   @map("id_document_type")
   idDocumentNumber String?   @map("id_document_number")
+  idVerifiedAt     DateTime? @map("id_verified_at")
+  idVerifiedById   String?   @map("id_verified_by")
   notes            String?
   isFlagged        Boolean   @default(false) @map("is_flagged")
   flagReason       String?   @map("flag_reason")
@@ -260,9 +263,10 @@ model Guest {
   flaggedById      String?   @map("flagged_by")
   createdAt        DateTime  @default(now()) @map("created_at")
 
-  hotel     Hotel     @relation(fields: [hotelId], references: [id], onDelete: Cascade)
-  bookings  Booking[]
-  flaggedBy User?     @relation("GuestFlaggedBy", fields: [flaggedById], references: [id])
+  hotel      Hotel     @relation(fields: [hotelId], references: [id], onDelete: Cascade)
+  bookings   Booking[]
+  flaggedBy  User?     @relation("GuestFlaggedBy", fields: [flaggedById], references: [id])
+  idVerifiedBy User?   @relation("GuestIdVerifiedBy", fields: [idVerifiedById], references: [id])
 
   @@map("guests")
 }

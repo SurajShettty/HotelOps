@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { DoorOpen, LogIn, Search } from 'lucide-react';
+import { DoorOpen, LogIn, Search, ShieldCheck } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { formatTime12h, localTimeHHmm, todayInTimeZone } from '@/lib/format';
-import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader } from '@/components/ui/primitives';
+import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
 import { RequireRole } from '@/components/ui/require-role';
@@ -21,9 +21,16 @@ interface Booking {
   status: string;
   checkInDate: string;
   checkOutDate: string;
-  guest: { fullName: string } & GuestBadgeInfo;
+  guest: {
+    fullName: string;
+    idDocumentType: string | null;
+    idDocumentNumber: string | null;
+    idVerifiedAt: string | null;
+  } & GuestBadgeInfo;
   bookingRooms: BookingRoom[];
 }
+
+const ID_DOCUMENT_TYPES = ['Passport', 'Aadhaar', 'Driving License', 'Voter ID', 'Other'];
 
 interface AvailableRoom {
   id: string;
@@ -54,10 +61,20 @@ export default function CheckinPage() {
   // conflict). Undefined until the availability check for that booking
   // resolves.
   const [assignedRoomOk, setAssignedRoomOk] = useState<Record<string, boolean>>({});
+  // Set when the assigned room is free to check into right now but has a
+  // room block starting later in the stay (e.g. a VIP hold) — informational
+  // only, shown as a note before check-in rather than blocking it.
+  const [roomBlockNote, setRoomBlockNote] = useState<Record<string, { startDate: string; reason: string } | null>>({});
   const [selectedAltRoom, setSelectedAltRoom] = useState<Record<string, string>>({});
   // Base rate per room type, so alternate-room options can be labeled
   // Upgrade/Downgrade relative to what was actually booked.
   const [roomTypeRates, setRoomTypeRates] = useState<Record<string, number>>({});
+  // ID verification, keyed by booking id — seeded from the guest's stored
+  // document (if any) once, then left to the receptionist to edit/confirm.
+  const [idDocType, setIdDocType] = useState<Record<string, string>>({});
+  const [idDocNumber, setIdDocNumber] = useState<Record<string, string>>({});
+  const [idVerified, setIdVerified] = useState<Record<string, boolean>>({});
+  const [idSeeded, setIdSeeded] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!hotelId) return;
@@ -79,6 +96,32 @@ export default function CheckinPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, hotelId]);
 
+  useEffect(() => {
+    const toSeed = arrivals.filter((b) => !idSeeded[b.id]);
+    if (toSeed.length === 0) return;
+    setIdDocType((prev) => {
+      const next = { ...prev };
+      toSeed.forEach((b) => { next[b.id] = b.guest.idDocumentType ?? ID_DOCUMENT_TYPES[0]; });
+      return next;
+    });
+    setIdDocNumber((prev) => {
+      const next = { ...prev };
+      toSeed.forEach((b) => { next[b.id] = b.guest.idDocumentNumber ?? ''; });
+      return next;
+    });
+    setIdVerified((prev) => {
+      const next = { ...prev };
+      toSeed.forEach((b) => { next[b.id] = !!b.guest.idVerifiedAt; });
+      return next;
+    });
+    setIdSeeded((prev) => {
+      const next = { ...prev };
+      toSeed.forEach((b) => { next[b.id] = true; });
+      return next;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arrivals]);
+
   // Only offered for single-room bookings — same scope limit as the "move
   // rooms" flows on the Check-Out and Extend Stay pages.
   useEffect(() => {
@@ -88,17 +131,44 @@ export default function CheckinPage() {
       if (b.bookingRooms.length !== 1) continue;
       if (altRooms[b.id]) continue;
       const room = b.bookingRooms[0].room;
-      apiFetch<{ availableRooms: AvailableRoom[] }>(
-        `/rooms/availability?hotelId=${hotelId}&checkIn=${today}&checkOut=${b.checkOutDate.slice(0, 10)}&excludeBookingId=${b.id}`,
+      const checkOut = b.checkOutDate.slice(0, 10);
+      // Mirrors what the server checks on submit (see CheckinService): once
+      // checked in, the room is reserved continuously from today through
+      // checkout. A conflicting BOOKING there is a real double-booking and
+      // hard-blocks check-in. A conflicting room BLOCK (VIP hold,
+      // maintenance…) doesn't — the room is genuinely free right now, so
+      // check-in can proceed with a note that it'll need to be moved before
+      // the block starts, unless the block already covers today itself.
+      apiFetch<{ bookingConflict: boolean; block: { startDate: string; reason: string } | null }>(
+        `/rooms/${room.id}/conflict?checkIn=${today}&checkOut=${checkOut}&excludeBookingId=${b.id}`,
       )
-        .then((res) => {
-          setAssignedRoomOk((prev) => ({ ...prev, [b.id]: room.status === 'AVAILABLE' && res.availableRooms.some((r) => r.id === room.id) }));
-          setAltRooms((prev) => ({ ...prev, [b.id]: res.availableRooms.filter((r) => r.status === 'AVAILABLE' && r.id !== room.id) }));
+        .then((conflict) => {
+          // Normalize to a plain YYYY-MM-DD before comparing — the API
+          // returns a full ISO timestamp, and comparing that directly
+          // against `today` (10 chars) would make a block starting exactly
+          // today sort as "later" than today and wrongly look non-blocking.
+          const blockStartDate = conflict.block ? conflict.block.startDate.slice(0, 10) : null;
+          const hardBlocked = room.status !== 'AVAILABLE' || conflict.bookingConflict || (!!blockStartDate && blockStartDate <= today);
+          setAssignedRoomOk((prev) => ({ ...prev, [b.id]: !hardBlocked }));
+          setRoomBlockNote((prev) => ({
+            ...prev,
+            [b.id]: !hardBlocked && conflict.block && blockStartDate ? { startDate: blockStartDate, reason: conflict.block.reason } : null,
+          }));
+          if (!hardBlocked) {
+            setAltRooms((prev) => ({ ...prev, [b.id]: [] }));
+            return;
+          }
+          apiFetch<{ availableRooms: AvailableRoom[] }>(
+            `/rooms/availability?hotelId=${hotelId}&checkIn=${today}&checkOut=${checkOut}&excludeBookingId=${b.id}`,
+          )
+            .then((res) => setAltRooms((prev) => ({ ...prev, [b.id]: res.availableRooms.filter((r) => r.status === 'AVAILABLE' && r.id !== room.id) })))
+            .catch(() => setAltRooms((prev) => ({ ...prev, [b.id]: [] })));
         })
         .catch(() => {
-          // Availability check failed — fall back to the housekeeping status
+          // Conflict check failed — fall back to the housekeeping status
           // alone rather than blocking check-in on a network hiccup.
           setAssignedRoomOk((prev) => ({ ...prev, [b.id]: room.status === 'AVAILABLE' }));
+          setRoomBlockNote((prev) => ({ ...prev, [b.id]: null }));
           setAltRooms((prev) => ({ ...prev, [b.id]: [] }));
         });
     }
@@ -130,6 +200,9 @@ export default function CheckinPage() {
           roomAssignments: booking.bookingRooms.map((br) => ({ bookingRoomId: br.id, roomId: altRoomId ?? br.room.id })),
           ...(depositRaw ? { depositAmount: Number(depositRaw) } : {}),
           waiveEarlyCheckInFee: !!waiveEarlyFee[booking.id],
+          idDocumentType: idDocType[booking.id] || undefined,
+          idDocumentNumber: idDocNumber[booking.id] || undefined,
+          idVerified: !!idVerified[booking.id],
         }),
       });
       reload();
@@ -187,6 +260,7 @@ export default function CheckinPage() {
             const altOptions = altRooms[b.id];
             const altPicked = selectedAltRoom[b.id];
             const canCheckIn = !notReady || (canOfferAlt && !!altPicked);
+            const blockNote = !notReady ? roomBlockNote[b.id] : null;
             return (
               <Card key={b.id} className="flex flex-wrap items-center justify-between gap-4 p-5">
                 <div>
@@ -234,6 +308,51 @@ export default function CheckinPage() {
                   >
                     {checkingInId === b.id ? 'Checking in…' : altPicked ? `Check In → Room ${altOptions?.find((r) => r.id === altPicked)?.roomNumber}` : 'Check In'}
                   </Button>
+                </div>
+                <div className="w-full space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                    <div>
+                      <Label htmlFor={`id-type-${b.id}`}>ID document type</Label>
+                      <Select
+                        id={`id-type-${b.id}`}
+                        value={idDocType[b.id] ?? ID_DOCUMENT_TYPES[0]}
+                        onChange={(e) => setIdDocType((prev) => ({ ...prev, [b.id]: e.target.value }))}
+                      >
+                        {ID_DOCUMENT_TYPES.map((t) => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </Select>
+                    </div>
+                    <div>
+                      <Label htmlFor={`id-number-${b.id}`}>ID number</Label>
+                      <Input
+                        id={`id-number-${b.id}`}
+                        placeholder="Document number"
+                        value={idDocNumber[b.id] ?? ''}
+                        onChange={(e) => setIdDocNumber((prev) => ({ ...prev, [b.id]: e.target.value }))}
+                      />
+                    </div>
+                    <label className="flex items-center gap-1.5 self-end pb-2 text-sm text-slate-700 sm:pb-2.5">
+                      <input
+                        type="checkbox"
+                        checked={!!idVerified[b.id]}
+                        onChange={(e) => setIdVerified((prev) => ({ ...prev, [b.id]: e.target.checked }))}
+                        className="h-3.5 w-3.5 rounded border-slate-300"
+                      />
+                      ID verified
+                    </label>
+                  </div>
+                  {b.guest.idVerifiedAt && (
+                    <p className="flex items-center gap-1 text-xs text-emerald-700">
+                      <ShieldCheck className="h-3.5 w-3.5" />
+                      Previously verified on {b.guest.idVerifiedAt.slice(0, 10)}
+                    </p>
+                  )}
+                  {blockNote && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      Note: room {b.bookingRooms[0].room.roomNumber} is free to check into now, but it's held for {blockNote.reason.toLowerCase()} from {blockNote.startDate} — move this guest to another room before then.
+                    </p>
+                  )}
                 </div>
                 {canOfferAlt && (
                   <div className="w-full space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">

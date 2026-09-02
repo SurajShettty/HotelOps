@@ -51,6 +51,43 @@ export class AvailabilityService {
   }
 
   /**
+   * Per-room conflict detail for a date range, split by source: an
+   * overlapping active booking (a real double-booking — Postgres's own
+   * EXCLUDE constraint on booking_rooms would refuse this regardless of
+   * what we check here) versus an overlapping room block (an operational
+   * hold with no such cross-table constraint against bookings — front desk
+   * can knowingly check a guest in anyway and move them before the block
+   * starts). Returns the earliest overlapping block, if any, so the caller
+   * can tell whether it covers the check-in day itself (unusable right now)
+   * or only a later stretch of the stay (usable now, move before then).
+   */
+  async findRoomConflict(
+    params: { roomId: string; checkIn: Date; checkOut: Date; excludeBookingId?: string },
+    client: Prisma.TransactionClient | PrismaService = this.prisma,
+  ) {
+    const { roomId, checkIn, checkOut, excludeBookingId } = params;
+
+    const conflictingBooking = await client.bookingRoom.findFirst({
+      where: {
+        roomId,
+        booking: {
+          status: { in: [...ACTIVE_BOOKING_STATUSES] },
+          checkInDate: { lt: checkOut },
+          checkOutDate: { gt: checkIn },
+          ...(excludeBookingId ? { id: { not: excludeBookingId } } : {}),
+        },
+      },
+    });
+
+    const conflictingBlock = await client.roomBlock.findFirst({
+      where: { roomId, startDate: { lt: checkOut }, endDate: { gt: checkIn } },
+      orderBy: { startDate: 'asc' },
+    });
+
+    return { bookingConflict: !!conflictingBooking, block: conflictingBlock };
+  }
+
+  /**
    * Throws ConflictException if any of `roomIds` overlap an existing active
    * booking or block for the given date range. Must be called inside the
    * same transaction as the write that reserves the rooms. This check gives
