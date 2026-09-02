@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@hotelops/database';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditLogService, fieldDiff } from '../audit-logs/audit-log.service';
@@ -24,6 +24,40 @@ export class HousekeepingService {
     return client.housekeepingTask.create({
       data: { roomId: params.roomId, status: 'DIRTY', priority: params.priority ?? 0, assignedToId },
     });
+  }
+
+  /**
+   * A guest-in-room request (extra towels, a tidy-up mid-stay, etc.) for a
+   * currently CHECKED_IN room — distinct from createDirtyTask's post-checkout
+   * turnover: the room stays OCCUPIED the whole time, so it must never be
+   * flipped to AVAILABLE when the task completes (see updateTask's guard).
+   * Uses the same auto-assign roster as a normal turnover task.
+   */
+  async requestService(hotelId: string, roomId: string, actorId: string, priority = 1) {
+    const room = await this.prisma.room.findUniqueOrThrow({ where: { id: roomId } });
+    if (room.hotelId !== hotelId) {
+      throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Room does not belong to this hotel' });
+    }
+    if (room.status !== 'OCCUPIED') {
+      throw new ConflictException({ code: 'ROOM_NOT_OCCUPIED', message: 'Room service can only be requested for a currently checked-in room.' });
+    }
+
+    const assignedToId = await this.resolveAutoAssignee(this.prisma, hotelId, room.floor);
+    const task = await this.prisma.housekeepingTask.create({
+      data: { roomId, status: 'DIRTY', priority, assignedToId, serviceRequest: true },
+      include: { assignedTo: { select: { id: true, fullName: true } } },
+    });
+
+    await this.auditLog.record(this.prisma, {
+      hotelId,
+      actorId,
+      entity: 'HousekeepingTask',
+      entityId: task.id,
+      action: 'CREATE',
+      after: { roomId, roomNumber: room.roomNumber, serviceRequest: true, assignedToId: assignedToId ?? null },
+    });
+
+    return task;
   }
 
   private async resolveAutoAssignee(client: DbClient, hotelId: string, floor: string | null): Promise<string | undefined> {
@@ -76,11 +110,14 @@ export class HousekeepingService {
   /**
    * The live housekeeping board: one row per room (its most recent task —
    * `distinct` + `orderBy: createdAt desc` picks the newest per roomId),
-   * excluding rooms currently occupied. Without the dedup, every checkout
+   * excluding rooms currently occupied — UNLESS that latest task is a
+   * requestService() mid-stay request, which needs to show and be actioned
+   * even though the guest hasn't left. Without the dedup, every checkout
    * creates a brand-new task row and old completed ones (status READY) are
    * never closed out, so they'd pile up in the Ready column across cycles.
-   * Full history (including superseded tasks) is still available via
-   * GET /reports/housekeeping for reporting.
+   * Full history (including superseded tasks) is still queryable directly
+   * via the housekeeping_tasks table for reporting — see GET
+   * /reports/housekeeping/by-staff for the aggregated view.
    */
   async findTasks(hotelId: string, status?: string) {
     const latestPerRoom = await this.prisma.housekeepingTask.findMany({
@@ -94,14 +131,14 @@ export class HousekeepingService {
       distinct: ['roomId'],
     });
 
-    const relevant = latestPerRoom.filter((t) => t.room.status !== 'OCCUPIED');
+    const relevant = latestPerRoom.filter((t) => t.room.status !== 'OCCUPIED' || t.serviceRequest);
     const filtered = status ? relevant.filter((t) => t.status === status) : relevant;
 
     return filtered.sort((a, b) => b.priority - a.priority || a.createdAt.getTime() - b.createdAt.getTime());
   }
 
   async updateTask(id: string, data: { status?: 'DIRTY' | 'IN_PROGRESS' | 'INSPECTED' | 'READY'; assignedToId?: string | null }, actorId: string) {
-    const before = await this.prisma.housekeepingTask.findUniqueOrThrow({ where: { id }, include: { room: { select: { hotelId: true } } } });
+    const before = await this.prisma.housekeepingTask.findUniqueOrThrow({ where: { id }, include: { room: { select: { hotelId: true, status: true } } } });
     const task = await this.prisma.housekeepingTask.update({
       where: { id },
       data: {
@@ -110,7 +147,10 @@ export class HousekeepingService {
       },
     });
 
-    if (data.status === 'READY') {
+    // A service-request task's room is still occupied by a guest — only a
+    // post-checkout turnover task (room genuinely sitting empty) should ever
+    // flip the room to AVAILABLE on completion.
+    if (data.status === 'READY' && before.room.status !== 'OCCUPIED') {
       await this.prisma.room.update({ where: { id: task.roomId }, data: { status: 'AVAILABLE' } });
     }
 

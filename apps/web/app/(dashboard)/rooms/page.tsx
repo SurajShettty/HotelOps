@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bed, ChevronDown, LayoutGrid, List, Pencil, Plus, Receipt, Trash2 } from 'lucide-react';
+import { Bed, Check, ChevronDown, LayoutGrid, List, Pencil, Plus, Receipt, Sparkles, Trash2 } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
@@ -174,6 +174,25 @@ export default function RoomsPage() {
   const [showAddRoom, setShowAddRoom] = useState(false);
 
   const [activeChargeRoom, setActiveChargeRoom] = useState<{ room: Room; anchor: Anchor } | null>(null);
+  const [requestingServiceId, setRequestingServiceId] = useState<string | null>(null);
+  const [serviceRequestedIds, setServiceRequestedIds] = useState<Set<string>>(new Set());
+
+  async function handleRequestService(room: Room) {
+    if (!hotelId) return;
+    setRequestingServiceId(room.id);
+    setError(null);
+    try {
+      await apiFetch('/housekeeping/tasks/service-request', {
+        method: 'POST',
+        body: JSON.stringify({ hotelId, roomId: room.id }),
+      });
+      setServiceRequestedIds((prev) => new Set(prev).add(room.id));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to request service');
+    } finally {
+      setRequestingServiceId(null);
+    }
+  }
 
   function reload() {
     if (!hotelId) return;
@@ -495,19 +514,36 @@ export default function RoomsPage() {
                     <td className="px-5 py-3"><StatusBadge status={r.status} /></td>
                     <td className="px-5 py-3">
                       {r.status === 'OCCUPIED' && (
-                        <button
-                          type="button"
-                          title="Room charges"
-                          onClick={(e) => {
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            const POPOVER_WIDTH = 288;
-                            const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
-                            setActiveChargeRoom({ room: r, anchor: { top: rect.bottom + 4, left } });
-                          }}
-                          className="flex items-center gap-1 text-slate-400 hover:text-brand-700"
-                        >
-                          <Receipt className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            title="Room charges"
+                            onClick={(e) => {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const POPOVER_WIDTH = 288;
+                              const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
+                              setActiveChargeRoom({ room: r, anchor: { top: rect.bottom + 4, left } });
+                            }}
+                            className="flex items-center gap-1 text-slate-400 hover:text-brand-700"
+                          >
+                            <Receipt className="h-4 w-4" />
+                          </button>
+                          {serviceRequestedIds.has(r.id) ? (
+                            <span className="flex items-center gap-1 text-xs font-medium text-emerald-600" title="Housekeeping has been notified">
+                              <Check className="h-3.5 w-3.5" /> Requested
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              title="Request room service"
+                              onClick={() => handleRequestService(r)}
+                              disabled={requestingServiceId === r.id}
+                              className="flex items-center gap-1 text-slate-400 hover:text-brand-700 disabled:opacity-50"
+                            >
+                              <Sparkles className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>

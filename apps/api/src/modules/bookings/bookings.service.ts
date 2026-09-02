@@ -166,7 +166,10 @@ export class BookingsService {
           guest: { include: GUEST_LOYALTY_INCLUDE },
           invoice: { select: { id: true } },
         },
-        orderBy: { createdAt: 'desc' },
+        // Last action taken on the booking, not when it was originally
+        // created — a room change or extend on an old reservation surfaces
+        // above one nobody has touched since.
+        orderBy: { updatedAt: 'desc' },
       }),
       this.prisma.booking.count({ where }),
     ]);
@@ -460,8 +463,12 @@ export class BookingsService {
       await this.housekeepingService.createDirtyTask(tx, { roomId: oldRoomId, priority: 1 });
       await tx.room.update({ where: { id: dto.newRoomId }, data: { status: 'OCCUPIED' } });
 
-      const updated = await tx.booking.findUniqueOrThrow({
+      // A plain `update` (rather than the read this used to be) so Prisma's
+      // `@updatedAt` bumps Booking.updatedAt — changeRoom otherwise never
+      // touches the bookings row itself, only BookingRoom/RoomChangeLog/Room.
+      const updated = await tx.booking.update({
         where: { id },
+        data: {},
         include: { bookingRooms: { include: { room: true } }, guest: true },
       });
 

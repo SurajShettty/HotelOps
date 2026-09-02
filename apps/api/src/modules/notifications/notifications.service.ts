@@ -31,7 +31,8 @@ export type NotificationType =
   | 'DAILY_BRIEFING'
   | 'ROOM_BLOCKED_TOO_LONG'
   | 'ROOM_UNBOOKED_TOO_LONG'
-  | 'TASK_NUDGE';
+  | 'TASK_NUDGE'
+  | 'SERVICE_REQUEST';
 
 export interface NotificationItem {
   id: string;
@@ -77,6 +78,7 @@ export class NotificationsService {
       blockedTooLong,
       unbookedTooLong,
       taskNudges,
+      serviceRequests,
       dailyBriefing,
     ] = await Promise.all([
       this.getUpcomingCheckIns(hotelId, todayStart, horizonEnd),
@@ -86,6 +88,7 @@ export class NotificationsService {
       this.getBlockedTooLong(hotelId, now),
       this.getUnbookedTooLong(hotelId, now),
       this.getTaskNudges(hotelId, userId),
+      this.getServiceRequestAlerts(hotelId, userId),
       this.getDailyBriefing(hotelId, todayStart, tomorrowStart, includeRevenue),
     ]);
 
@@ -96,9 +99,16 @@ export class NotificationsService {
     // the underlying problem drags on.
     const items = [
       dailyBriefing,
-      ...[...upcomingCheckIns, ...upcomingCheckOuts, ...bookingConfirmations, ...maintenanceAlerts, ...blockedTooLong, ...unbookedTooLong, ...taskNudges].sort(
-        (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
-      ),
+      ...[
+        ...upcomingCheckIns,
+        ...upcomingCheckOuts,
+        ...bookingConfirmations,
+        ...maintenanceAlerts,
+        ...blockedTooLong,
+        ...unbookedTooLong,
+        ...taskNudges,
+        ...serviceRequests,
+      ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
     ];
 
     return {
@@ -112,6 +122,7 @@ export class NotificationsService {
         blockedTooLong: blockedTooLong.length,
         unbookedTooLong: unbookedTooLong.length,
         taskNudge: taskNudges.length,
+        serviceRequest: serviceRequests.length,
       },
     };
   }
@@ -205,6 +216,30 @@ export class NotificationsService {
       title: 'Room needs your attention',
       message: t.nudgedBy ? `Room ${t.room.roomNumber} — flagged by ${t.nudgedBy.fullName}` : `Room ${t.room.roomNumber}`,
       timestamp: t.nudgedAt!.toISOString(),
+      dueToday: true,
+    }));
+  }
+
+  /**
+   * Also per-viewer, like getTaskNudges — a mid-stay room-service request
+   * (see HousekeepingService.requestService, raised from the Rooms tab for
+   * a currently occupied room) notifies whichever housekeeping staff member
+   * it landed on, whether that was the auto-assign roster or a manual pick.
+   * Stays until the task is done or reassigned, same as a nudge.
+   */
+  private async getServiceRequestAlerts(hotelId: string, userId: string): Promise<NotificationItem[]> {
+    const tasks = await this.prisma.housekeepingTask.findMany({
+      where: { room: { hotelId }, assignedToId: userId, serviceRequest: true, status: { not: 'READY' } },
+      include: { room: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return tasks.map((t) => ({
+      id: `service-request-${t.id}`,
+      type: 'SERVICE_REQUEST' as const,
+      title: 'Room service requested',
+      message: `Room ${t.room.roomNumber} — guest is currently in the room`,
+      timestamp: t.createdAt.toISOString(),
       dueToday: true,
     }));
   }

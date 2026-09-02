@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizePagination } from '../../common/pagination';
-import { GUEST_LOYALTY_INCLUDE, withGuestLoyaltyBadge } from '../guests/guest-loyalty';
 
 @Injectable()
 export class ReportsService {
@@ -27,52 +26,52 @@ export class ReportsService {
     return { invoiceCount: result._count, totalRevenue: result._sum.grandTotal ?? 0, totalTax: result._sum.taxTotal ?? 0, from, to };
   }
 
-  async bookings(hotelId: string, from: Date, to: Date, page?: string, pageSize?: string) {
+  /**
+   * One row per invoice (completed stay) rather than the aggregate revenue()
+   * above — room(s) and guest are shown together per row since a checkout's
+   * financial breakdown (roomSubtotal, charges, tax, etc.) only exists at the
+   * invoice level, not split per room; a multi-room booking still lists every
+   * room it covered so it's findable by any of them.
+   */
+  async revenueDetailed(hotelId: string, from: Date, to: Date, page?: string, pageSize?: string) {
     const { page: p, pageSize: ps, skip, take } = normalizePagination(page, pageSize);
-    const where = { hotelId, checkInDate: { gte: from, lt: to } };
+    const where = { booking: { hotelId }, issuedAt: { gte: from, lt: to } };
     const [items, total] = await Promise.all([
-      this.prisma.booking.findMany({
+      this.prisma.invoice.findMany({
         where,
         skip,
         take,
-        include: { guest: { include: GUEST_LOYALTY_INCLUDE }, bookingRooms: true },
-        orderBy: { checkInDate: 'asc' },
+        include: {
+          booking: {
+            include: {
+              guest: { select: { id: true, fullName: true } },
+              bookingRooms: { include: { room: { select: { roomNumber: true } } } },
+            },
+          },
+        },
+        orderBy: { issuedAt: 'desc' },
       }),
-      this.prisma.booking.count({ where }),
+      this.prisma.invoice.count({ where }),
     ]);
-    return { items: items.map(withGuestLoyaltyBadge), total, page: p, pageSize: ps };
-  }
 
-  async cancellations(hotelId: string, from: Date, to: Date, page?: string, pageSize?: string) {
-    const { page: p, pageSize: ps, skip, take } = normalizePagination(page, pageSize);
-    const where = { hotelId, status: { in: ['CANCELLED', 'NO_SHOW'] } as never, checkInDate: { gte: from, lt: to } };
-    const [items, total] = await Promise.all([
-      this.prisma.booking.findMany({
-        where,
-        skip,
-        take,
-        include: { guest: { include: GUEST_LOYALTY_INCLUDE } },
-        orderBy: { checkInDate: 'asc' },
-      }),
-      this.prisma.booking.count({ where }),
-    ]);
-    return { items: items.map(withGuestLoyaltyBadge), total, page: p, pageSize: ps };
-  }
-
-  async housekeeping(hotelId: string, from: Date, to: Date, page?: string, pageSize?: string) {
-    const { page: p, pageSize: ps, skip, take } = normalizePagination(page, pageSize);
-    const where = { room: { hotelId }, createdAt: { gte: from, lt: to } };
-    const [items, total] = await Promise.all([
-      this.prisma.housekeepingTask.findMany({
-        where,
-        skip,
-        take,
-        include: { room: true, assignedTo: { select: { id: true, fullName: true, email: true } } },
-        orderBy: { createdAt: 'desc' },
-      }),
-      this.prisma.housekeepingTask.count({ where }),
-    ]);
-    return { items, total, page: p, pageSize: ps };
+    return {
+      items: items.map((inv) => ({
+        invoiceId: inv.id,
+        issuedAt: inv.issuedAt,
+        guestId: inv.booking.guest.id,
+        guestName: inv.booking.guest.fullName,
+        roomNumbers: inv.booking.bookingRooms.map((br) => br.room.roomNumber),
+        nights: inv.nights,
+        roomSubtotal: inv.roomSubtotal,
+        chargesTotal: inv.chargesTotal,
+        discountTotal: inv.discountTotal,
+        taxTotal: inv.taxTotal,
+        grandTotal: inv.grandTotal,
+      })),
+      total,
+      page: p,
+      pageSize: ps,
+    };
   }
 
   /**

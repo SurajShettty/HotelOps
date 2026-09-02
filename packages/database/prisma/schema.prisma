@@ -277,6 +277,10 @@ model Booking {
   checkOutDate DateTime      @map("check_out_date") @db.Date
   createdById  String        @map("created_by")
   createdAt    DateTime      @default(now()) @map("created_at")
+  // Bumped by Prisma on every `booking.update()` — the "last action taken on
+  // this booking" for the Bookings tab's sort, so a room change or extend on
+  // an old reservation surfaces above one nobody has touched since creation.
+  updatedAt    DateTime      @updatedAt @map("updated_at")
 
   hotel        Hotel         @relation(fields: [hotelId], references: [id], onDelete: Cascade)
   guest        Guest         @relation(fields: [guestId], references: [id])
@@ -425,6 +429,11 @@ model HousekeepingTask {
   // in-app-only signal surfaced on the Housekeeping board, not a push/SMS/email.
   nudgedAt     DateTime?          @map("nudged_at")
   nudgedById   String?            @map("nudged_by")
+  // A guest-in-room request (e.g. "please tidy up", extra towels) raised via
+  // HousekeepingService.requestService — unlike every other task here, the
+  // room stays OCCUPIED throughout, so reaching READY must NOT flip it to
+  // AVAILABLE the way a post-checkout turnover does (see updateTask's guard).
+  serviceRequest Boolean          @default(false) @map("service_request")
 
   room       Room  @relation(fields: [roomId], references: [id], onDelete: Cascade)
   assignedTo User? @relation(fields: [assignedToId], references: [id])

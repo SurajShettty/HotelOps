@@ -33,6 +33,15 @@ export class HousekeepingController {
   nudge(@Param('id') id: string, @CurrentUser() user: CurrentUserPayload) {
     return this.housekeepingService.nudge(id, user.id);
   }
+
+  // Also narrower than the class-level @Roles — front desk is who'd field a
+  // guest's in-room request (housekeeping gets assigned the resulting task,
+  // it doesn't raise it for itself).
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
+  @Post('service-request')
+  requestService(@Body() body: { hotelId: string; roomId: string; priority?: number }, @CurrentUser() user: CurrentUserPayload) {
+    return this.housekeepingService.requestService(body.hotelId, body.roomId, user.id, body.priority);
+  }
 }
 
 // Narrow, purpose-built directory for the assignee dropdown on the

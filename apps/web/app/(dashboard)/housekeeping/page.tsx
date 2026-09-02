@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowRight, BellRing, ChevronDown, Sparkles, UserRound } from 'lucide-react';
+import { ArrowRight, BellRing, ChevronDown, DoorOpen, Sparkles, UserRound } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Card, ErrorBanner, PageHeader } from '@/components/ui/primitives';
@@ -16,11 +16,12 @@ interface Task {
   id: string;
   status: 'DIRTY' | 'IN_PROGRESS' | 'INSPECTED' | 'READY';
   priority: number;
-  room: { roomNumber: string };
+  room: { roomNumber: string; status: string };
   assignedToId: string | null;
   assignedTo: { id: string; fullName: string } | null;
   nudgedAt: string | null;
   nudgedBy: { fullName: string } | null;
+  serviceRequest: boolean;
 }
 
 // A nudge older than this no longer needs to stand out — it's already been
@@ -139,10 +140,13 @@ export default function HousekeepingPage() {
                         assignedStaff && !staff.some((s) => s.id === assignedStaff.id) ? [...staff, assignedStaff] : staff;
                       const nudgeAge = t.nudgedAt ? minutesAgo(t.nudgedAt) : null;
                       const recentlyNudged = nudgeAge !== null && nudgeAge < NUDGE_HIGHLIGHT_MINUTES;
+                      const guestPresent = t.serviceRequest && t.room.status === 'OCCUPIED';
                       return (
                         <div
                           key={t.id}
-                          className={`rounded-lg border p-3 ${recentlyNudged ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200'}`}
+                          className={`rounded-lg border p-3 ${
+                            recentlyNudged ? 'border-amber-300 bg-amber-50/60' : guestPresent ? 'border-sky-200 bg-sky-50/60' : 'border-slate-200'
+                          }`}
                         >
                           <div className="flex items-center justify-between">
                             <span className="text-sm font-medium text-slate-900">Room {t.room.roomNumber}</span>
@@ -150,6 +154,11 @@ export default function HousekeepingPage() {
                               <span className="rounded-full bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">Priority</span>
                             )}
                           </div>
+                          {guestPresent && (
+                            <div className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-sky-700">
+                              <DoorOpen className="h-3 w-3" /> Room service — guest present, knock first
+                            </div>
+                          )}
                           {recentlyNudged && (
                             <div className="mt-1.5 flex items-center gap-1 text-[11px] font-medium text-amber-700">
                               <BellRing className="h-3 w-3" />

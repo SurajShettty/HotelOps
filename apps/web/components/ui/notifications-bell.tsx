@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Ban, Bell, BellRing, CalendarCheck, CalendarClock, Check, Hourglass, Sunrise, Wrench } from 'lucide-react';
+import { Ban, Bell, BellRing, CalendarCheck, CalendarClock, Check, DoorOpen, Hourglass, Sunrise, Wrench } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 
@@ -35,7 +35,8 @@ type NotificationType =
   | 'DAILY_BRIEFING'
   | 'ROOM_BLOCKED_TOO_LONG'
   | 'ROOM_UNBOOKED_TOO_LONG'
-  | 'TASK_NUDGE';
+  | 'TASK_NUDGE'
+  | 'SERVICE_REQUEST';
 
 interface NotificationItem {
   id: string;
@@ -62,6 +63,7 @@ const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: stri
   ROOM_BLOCKED_TOO_LONG: Ban,
   ROOM_UNBOOKED_TOO_LONG: Hourglass,
   TASK_NUDGE: BellRing,
+  SERVICE_REQUEST: DoorOpen,
 };
 
 function relativeTime(iso: string) {
@@ -178,6 +180,7 @@ export function NotificationsBell() {
                 const Icon = TYPE_ICON[item.type];
                 const isUnread = !readIds.has(item.id);
                 const isNudge = item.type === 'TASK_NUDGE';
+                const isServiceRequest = item.type === 'SERVICE_REQUEST';
                 return (
                   <button
                     key={item.id}
@@ -185,12 +188,16 @@ export function NotificationsBell() {
                     disabled={!isUnread}
                     title={isUnread ? 'Mark as read' : undefined}
                     className={`group flex w-full items-start gap-2.5 border-b px-3 py-2.5 text-left last:border-0 disabled:cursor-default disabled:hover:bg-transparent ${
-                      isNudge ? 'border-amber-100 bg-amber-50/60 hover:bg-amber-50' : 'border-slate-50 hover:bg-slate-50'
+                      isNudge
+                        ? 'border-amber-100 bg-amber-50/60 hover:bg-amber-50'
+                        : isServiceRequest
+                          ? 'border-sky-100 bg-sky-50/60 hover:bg-sky-50'
+                          : 'border-slate-50 hover:bg-slate-50'
                     }`}
                   >
                     <div
                       className={`relative mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
-                        isNudge ? 'bg-amber-100 text-amber-700' : 'bg-slate-100 text-slate-500'
+                        isNudge ? 'bg-amber-100 text-amber-700' : isServiceRequest ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-500'
                       }`}
                     >
                       <Icon className="h-3.5 w-3.5" />
