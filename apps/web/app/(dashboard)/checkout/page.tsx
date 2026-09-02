@@ -567,12 +567,24 @@ export default function CheckoutPage() {
   const [extendingId, setExtendingId] = useState<string | null>(null);
   const [roomSearch, setRoomSearch] = useState('');
   const [checkOutTime, setCheckOutTime] = useState<string | null>(null);
+  const [dueAmounts, setDueAmounts] = useState<Record<string, number>>({});
 
   function reload() {
     if (!hotelId) return;
     setLoading(true);
     apiFetch<{ items: Booking[] }>(`/bookings?hotelId=${hotelId}&status=CHECKED_IN&pageSize=200`)
-      .then((res) => setStays([...res.items].sort((a, b) => a.checkOutDate.localeCompare(b.checkOutDate))))
+      .then((res) => {
+        const items = [...res.items].sort((a, b) => a.checkOutDate.localeCompare(b.checkOutDate));
+        setStays(items);
+        items.forEach((b) => {
+          apiFetch<Folio>(`/checkout/preview?hotelId=${hotelId}`, {
+            method: 'POST',
+            body: JSON.stringify({ bookingId: b.id, additionalCharges: [], discounts: [], waiveLateCheckOutFee: false }),
+          })
+            .then((f) => setDueAmounts((prev) => ({ ...prev, [b.id]: f.balanceDue })))
+            .catch(() => {});
+        });
+      })
       .finally(() => setLoading(false));
   }
 
@@ -645,7 +657,13 @@ export default function CheckoutPage() {
                       {b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
+                    {dueAmounts[b.id] !== undefined && activeId !== b.id && (
+                      <div className="text-right">
+                        <div className="text-xs text-slate-400">Total payable</div>
+                        <div className="text-sm font-semibold text-slate-900">{money(dueAmounts[b.id])}</div>
+                      </div>
+                    )}
                     <Button
                       variant="secondary"
                       onClick={() => {
