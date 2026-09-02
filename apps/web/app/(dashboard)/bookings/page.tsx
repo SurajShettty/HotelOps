@@ -1,10 +1,11 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowLeftRight, CalendarRange, DoorOpen, Download, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { ArrowLeftRight, CalendarRange, DoorOpen, Download, Eye, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
 import { apiFetch, ApiError, downloadFile } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
-import { todayInTimeZone } from '@/lib/format';
+import { todayInTimeZone, localTimeHHmm, formatTime12h } from '@/lib/format';
 import { RequireRole } from '@/components/ui/require-role';
 import { NON_HOUSEKEEPING_ROLES } from '@/lib/roles';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
@@ -32,6 +33,11 @@ interface Booking {
   status: string;
   checkInDate: string;
   checkOutDate: string;
+  // Exact moment check-in/check-out actually happened — set once by
+  // Checkin/CheckoutService, null until then. Distinct from the dates above,
+  // which are just calendar days and can be edited afterward.
+  checkedInAt: string | null;
+  checkedOutAt: string | null;
   guest: { fullName: string } & GuestBadgeInfo;
   bookingRooms: { id: string; occupants: number; rateApplied: string; room: { id: string; roomNumber: string } }[];
   invoice: { id: string } | null;
@@ -47,6 +53,12 @@ interface RateQuote {
   baseRate: number;
   averageRate: number;
   blended: boolean;
+}
+
+/** "2026-09-02T12:34:00.000Z" -> "6:04 PM" in the hotel's own timezone, or null before that event has happened. */
+function stayTime(iso: string | null, timezone: string): string | null {
+  if (!iso) return null;
+  return formatTime12h(localTimeHHmm(new Date(iso), timezone));
 }
 
 function BookingForm({
@@ -331,6 +343,108 @@ function BookingForm({
   );
 }
 
+/**
+ * A CHECKED_IN booking is only editable within narrow limits (see
+ * BookingsService.update's isCheckedIn branch) — checkInDate is frozen and a
+ * room swap must go through Change Room instead, so this deliberately isn't
+ * the full BookingForm: just checkOutDate and each room's occupant count.
+ */
+function CheckedInEditForm({
+  hotelId,
+  booking,
+  onDone,
+  onCancel,
+}: {
+  hotelId: string;
+  booking: Booking;
+  onDone: () => void;
+  onCancel: () => void;
+}) {
+  const [checkOut, setCheckOut] = useState(booking.checkOutDate.slice(0, 10));
+  const [occupants, setOccupants] = useState<Record<string, string>>(
+    Object.fromEntries(booking.bookingRooms.map((br) => [br.id, String(br.occupants)])),
+  );
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    for (const br of booking.bookingRooms) {
+      const count = Number(occupants[br.id]);
+      if (!count || count < 1) {
+        setError('Enter the number of occupants for each room');
+        return;
+      }
+    }
+    setSubmitting(true);
+    try {
+      await apiFetch(`/bookings/${booking.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          hotelId,
+          checkOutDate: checkOut,
+          rooms: booking.bookingRooms.map((br) => ({
+            roomId: br.room.id,
+            rate: Number(br.rateApplied),
+            occupants: Number(occupants[br.id]),
+          })),
+        }),
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to save changes');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card className="mb-6 p-5">
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && <ErrorBanner>{error}</ErrorBanner>}
+        <p className="flex items-center gap-1.5 text-sm text-slate-500">
+          Editing <span className="font-medium text-slate-900">{booking.guest.fullName}</span>&apos;s stay
+          <GuestBadges guest={booking.guest} />
+        </p>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div>
+            <Label htmlFor="checkedin-checkout">Check-out date</Label>
+            <Input
+              id="checkedin-checkout"
+              required
+              type="date"
+              value={checkOut}
+              onChange={(e) => setCheckOut(e.target.value)}
+            />
+          </div>
+          {booking.bookingRooms.map((br) => (
+            <div key={br.id}>
+              <Label htmlFor={`occupants-${br.id}`}>Occupants — Room {br.room.roomNumber}</Label>
+              <Input
+                id={`occupants-${br.id}`}
+                required
+                type="number"
+                min={1}
+                value={occupants[br.id] ?? ''}
+                onChange={(e) => setOccupants((prev) => ({ ...prev, [br.id]: e.target.value }))}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <Button type="submit" disabled={submitting}>
+            {submitting ? 'Saving…' : 'Save Changes'}
+          </Button>
+          <button type="button" onClick={onCancel} className="text-sm text-slate-400 hover:text-slate-700">
+            Cancel
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
+
 function ChangeRoomForm({
   hotelId,
   booking,
@@ -553,6 +667,328 @@ function ChangeRoomForm({
   );
 }
 
+interface InvoicePreviewData {
+  nights: number;
+  roomSubtotal: string;
+  lateCheckOutFee: string;
+  additionalCharges: { description: string; amount: number }[];
+  discounts: { description: string; amount: number }[];
+  subtotal: string;
+  taxRatePercent: string;
+  taxTotal: string;
+  grandTotal: string;
+  issuedAt: string;
+  booking: {
+    checkInDate: string;
+    checkOutDate: string;
+    checkedInAt: string | null;
+    checkedOutAt: string | null;
+    guest: { fullName: string };
+    bookingRooms: { id: string; room: { roomNumber: string } }[];
+    roomCharges: { id: string; description: string; amount: string; createdAt: string }[];
+    payments: { id: string; amount: string; method: string; type: string; createdAt: string }[];
+  };
+}
+
+function money(n: string | number) {
+  return Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/**
+ * A lighter, in-app alternative to the downloaded PDF — every line that
+ * makes up the folio (room nights, logged charges, ad-hoc charges/discounts
+ * typed in at checkout, the late fee, and payments received), each dated,
+ * without leaving the page. Not styled as an invoice document on purpose —
+ * that's what the PDF download is for.
+ */
+function InvoicePreviewModal({
+  invoiceId,
+  hotelId,
+  timezone,
+  onClose,
+}: {
+  invoiceId: string;
+  hotelId: string;
+  timezone: string;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<InvoicePreviewData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    apiFetch<InvoicePreviewData>(`/invoices/${invoiceId}?hotelId=${hotelId}`)
+      .then(setData)
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load invoice'))
+      .finally(() => setLoading(false));
+  }, [invoiceId, hotelId]);
+
+  const checkoutDateStr = data?.issuedAt.slice(0, 10);
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40 bg-slate-900/40" onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-popover">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-900">Invoice preview</h3>
+            <button onClick={onClose} className="shrink-0 text-slate-400 hover:text-slate-700">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {loading ? (
+            <p className="text-sm text-slate-400">Loading…</p>
+          ) : error ? (
+            <ErrorBanner>{error}</ErrorBanner>
+          ) : data ? (
+            <div className="space-y-4 text-sm">
+              <div>
+                <p className="font-medium text-slate-900">{data.booking.guest.fullName}</p>
+                <p className="text-xs text-slate-500">
+                  Room {data.booking.bookingRooms.map((br) => br.room.roomNumber).join(', ')} ·{' '}
+                  {data.booking.checkInDate.slice(0, 10)}
+                  {stayTime(data.booking.checkedInAt, timezone) ? ` ${stayTime(data.booking.checkedInAt, timezone)}` : ''}
+                  {' → '}
+                  {data.booking.checkOutDate.slice(0, 10)}
+                  {stayTime(data.booking.checkedOutAt, timezone) ? ` ${stayTime(data.booking.checkedOutAt, timezone)}` : ''}
+                  {' '}({data.nights} night{data.nights === 1 ? '' : 's'})
+                </p>
+              </div>
+
+              <div className="divide-y divide-slate-100 rounded-lg border border-slate-100">
+                <div className="flex items-center justify-between gap-3 px-3 py-2">
+                  <span>Room charges ({data.nights} night{data.nights === 1 ? '' : 's'})</span>
+                  <span className="shrink-0 font-medium text-slate-900">{money(data.roomSubtotal)}</span>
+                </div>
+                {data.booking.roomCharges.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                    <span className="flex min-w-0 items-baseline gap-2">
+                      <span className="truncate">{c.description}</span>
+                      <span className="shrink-0 text-xs text-slate-400">{c.createdAt.slice(0, 10)}</span>
+                    </span>
+                    <span className="shrink-0 font-medium text-slate-900">{money(c.amount)}</span>
+                  </div>
+                ))}
+                {data.additionalCharges.map((c, i) => (
+                  <div key={`ac-${i}`} className="flex items-center justify-between gap-3 px-3 py-2">
+                    <span className="flex min-w-0 items-baseline gap-2">
+                      <span className="truncate">{c.description}</span>
+                      <span className="shrink-0 text-xs text-slate-400">{checkoutDateStr}</span>
+                    </span>
+                    <span className="shrink-0 font-medium text-slate-900">{money(c.amount)}</span>
+                  </div>
+                ))}
+                {Number(data.lateCheckOutFee) > 0 && (
+                  <div className="flex items-center justify-between gap-3 px-3 py-2">
+                    <span className="flex min-w-0 items-baseline gap-2">
+                      <span className="truncate">Late check-out fee</span>
+                      <span className="shrink-0 text-xs text-slate-400">{checkoutDateStr}</span>
+                    </span>
+                    <span className="shrink-0 font-medium text-slate-900">{money(data.lateCheckOutFee)}</span>
+                  </div>
+                )}
+                {data.discounts.map((d, i) => (
+                  <div key={`disc-${i}`} className="flex items-center justify-between gap-3 px-3 py-2 text-rose-700">
+                    <span className="flex min-w-0 items-baseline gap-2">
+                      <span className="truncate">{d.description}</span>
+                      <span className="shrink-0 text-xs text-rose-300">{checkoutDateStr}</span>
+                    </span>
+                    <span className="shrink-0 font-medium">-{money(d.amount)}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-1 border-t border-slate-100 pt-3">
+                <div className="flex items-center justify-between text-slate-600">
+                  <span>Subtotal</span>
+                  <span>{money(data.subtotal)}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-600">
+                  <span>Tax ({Number(data.taxRatePercent)}%)</span>
+                  <span>{money(data.taxTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between text-base font-semibold text-slate-900">
+                  <span>Grand total</span>
+                  <span>{money(data.grandTotal)}</span>
+                </div>
+              </div>
+
+              {data.booking.payments.length > 0 && (
+                <div>
+                  <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">Payments</p>
+                  <div className="space-y-1">
+                    {data.booking.payments.map((p) => (
+                      <div key={p.id} className="flex items-center justify-between gap-3 text-slate-600">
+                        <span className="truncate">
+                          {p.method} {p.type === 'REFUND' ? 'refund' : 'payment'} · {p.createdAt.slice(0, 10)}
+                        </span>
+                        <span className="shrink-0">
+                          {p.type === 'REFUND' ? '-' : ''}
+                          {money(p.amount)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
+interface StayPreviewData {
+  checkInDate: string;
+  checkOutDate: string;
+  checkedInAt: string | null;
+  guest: { fullName: string };
+  bookingRooms: { id: string; occupants: number; rateApplied: string; room: { roomNumber: string } }[];
+  roomCharges: { id: string; description: string; amount: string; createdAt: string }[];
+  payments: { id: string; amount: string; method: string; type: string; reference: string | null; createdAt: string }[];
+}
+
+/**
+ * The CHECKED_IN counterpart to InvoicePreviewModal — there's no invoice yet
+ * (that's only created at checkout), so this reads the booking directly:
+ * what's been paid so far (the check-in deposit and anything since) and what
+ * charges have been logged mid-stay. Deliberately no grand total — nights,
+ * tax, and any late fee aren't settled until actual checkout, and showing a
+ * number that looks like a final bill before then would be misleading.
+ */
+function StayPreviewModal({
+  bookingId,
+  hotelId,
+  timezone,
+  onClose,
+}: {
+  bookingId: string;
+  hotelId: string;
+  timezone: string;
+  onClose: () => void;
+}) {
+  const [data, setData] = useState<StayPreviewData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    apiFetch<StayPreviewData>(`/bookings/${bookingId}?hotelId=${hotelId}`)
+      .then(setData)
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load stay'))
+      .finally(() => setLoading(false));
+  }, [bookingId, hotelId]);
+
+  const paidSoFar = data
+    ? data.payments.reduce((sum, p) => sum + (p.type === 'REFUND' ? -Number(p.amount) : Number(p.amount)), 0)
+    : 0;
+  const chargesSoFar = data ? data.roomCharges.reduce((sum, c) => sum + Number(c.amount), 0) : 0;
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40 bg-slate-900/40" onClick={onClose} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-popover">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-900">Stay preview</h3>
+            <button onClick={onClose} className="shrink-0 text-slate-400 hover:text-slate-700">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          {loading ? (
+            <p className="text-sm text-slate-400">Loading…</p>
+          ) : error ? (
+            <ErrorBanner>{error}</ErrorBanner>
+          ) : data ? (
+            <div className="space-y-4 text-sm">
+              <div>
+                <p className="font-medium text-slate-900">{data.guest.fullName}</p>
+                <p className="text-xs text-slate-500">
+                  Room {data.bookingRooms.map((br) => br.room.roomNumber).join(', ')} ·{' '}
+                  {data.checkInDate.slice(0, 10)}
+                  {stayTime(data.checkedInAt, timezone) ? ` ${stayTime(data.checkedInAt, timezone)}` : ''}
+                  {' → '}
+                  {data.checkOutDate.slice(0, 10)} (planned)
+                </p>
+                <p className="mt-0.5 text-xs text-slate-500">
+                  {data.bookingRooms.map((br) => `Room ${br.room.roomNumber}: ${br.occupants} guest${br.occupants === 1 ? '' : 's'}, ${money(br.rateApplied)}/night`).join(' · ')}
+                </p>
+              </div>
+
+              <div>
+                <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">Payments</p>
+                {data.payments.length === 0 ? (
+                  <p className="text-xs text-slate-400">No payments logged yet.</p>
+                ) : (
+                  <div className="divide-y divide-slate-100 rounded-lg border border-slate-100">
+                    {data.payments.map((p) => {
+                      const isRefund = p.type === 'REFUND';
+                      const label = isRefund ? `${p.method} refund` : p.reference === 'Check-in deposit' ? `${p.method} deposit` : `${p.method} payment`;
+                      return (
+                        <div key={p.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                          <span className="flex min-w-0 items-baseline gap-2">
+                            <span className="truncate">{label}</span>
+                            <span className="shrink-0 text-xs text-slate-400">{p.createdAt.slice(0, 10)}</span>
+                          </span>
+                          <span className={`shrink-0 font-medium ${isRefund ? 'text-rose-700' : 'text-slate-900'}`}>
+                            {isRefund ? '-' : ''}
+                            {money(p.amount)}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <p className="mb-1.5 text-xs font-medium uppercase tracking-wide text-slate-500">Additional charges</p>
+                {data.roomCharges.length === 0 ? (
+                  <p className="text-xs text-slate-400">No charges logged yet.</p>
+                ) : (
+                  <div className="divide-y divide-slate-100 rounded-lg border border-slate-100">
+                    {data.roomCharges.map((c) => (
+                      <div key={c.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                        <span className="flex min-w-0 items-baseline gap-2">
+                          <span className="truncate">{c.description}</span>
+                          <span className="shrink-0 text-xs text-slate-400">{c.createdAt.slice(0, 10)}</span>
+                        </span>
+                        <span className="shrink-0 font-medium text-slate-900">{money(c.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-1 border-t border-slate-100 pt-3">
+                <div className="flex items-center justify-between text-slate-600">
+                  <span>Charges logged so far</span>
+                  <span>{money(chargesSoFar)}</span>
+                </div>
+                <div className="flex items-center justify-between font-medium text-slate-900">
+                  <span>Paid so far</span>
+                  <span>{money(paidSoFar)}</span>
+                </div>
+                <p className="pt-1 text-xs text-slate-400">
+                  Room rate, nights, tax, and any late fee aren&apos;t final until check-out.
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 export default function BookingsPage() {
   const { hotelId, ready, timezone } = useCurrentHotel();
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -572,6 +1008,8 @@ export default function BookingsPage() {
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [quickFilter, setQuickFilter] = useState<'ARRIVING_TODAY' | 'DEPARTING_TODAY' | null>(null);
   const [downloadingInvoiceId, setDownloadingInvoiceId] = useState<string | null>(null);
+  const [previewInvoiceId, setPreviewInvoiceId] = useState<string | null>(null);
+  const [previewStayId, setPreviewStayId] = useState<string | null>(null);
 
   const today = todayInTimeZone(timezone);
 
@@ -769,15 +1207,27 @@ export default function BookingsPage() {
       )}
 
       {editingBooking && (
-        <BookingForm
-          hotelId={hotelId}
-          initial={editingBooking}
-          onDone={() => {
-            setEditingBooking(null);
-            reload();
-          }}
-          onCancel={() => setEditingBooking(null)}
-        />
+        editingBooking.status === 'CHECKED_IN' ? (
+          <CheckedInEditForm
+            hotelId={hotelId}
+            booking={editingBooking}
+            onDone={() => {
+              setEditingBooking(null);
+              reload();
+            }}
+            onCancel={() => setEditingBooking(null)}
+          />
+        ) : (
+          <BookingForm
+            hotelId={hotelId}
+            initial={editingBooking}
+            onDone={() => {
+              setEditingBooking(null);
+              reload();
+            }}
+            onCancel={() => setEditingBooking(null)}
+          />
+        )
       )}
 
       {changingRoomBooking && (
@@ -789,6 +1239,24 @@ export default function BookingsPage() {
             reload();
           }}
           onCancel={() => setChangingRoomBooking(null)}
+        />
+      )}
+
+      {previewInvoiceId && hotelId && (
+        <InvoicePreviewModal
+          invoiceId={previewInvoiceId}
+          hotelId={hotelId}
+          timezone={timezone}
+          onClose={() => setPreviewInvoiceId(null)}
+        />
+      )}
+
+      {previewStayId && hotelId && (
+        <StayPreviewModal
+          bookingId={previewStayId}
+          hotelId={hotelId}
+          timezone={timezone}
+          onClose={() => setPreviewStayId(null)}
         />
       )}
 
@@ -825,6 +1293,7 @@ export default function BookingsPage() {
             <tbody className="divide-y divide-slate-100">
               {bookings.map((b) => {
                 const editable = b.status === 'CONFIRMED';
+                const canEditCheckedIn = b.status === 'CHECKED_IN';
                 const canChangeRoom = b.status === 'CHECKED_IN';
                 const invoiceId = b.invoice?.id;
                 return (
@@ -837,12 +1306,31 @@ export default function BookingsPage() {
                     </td>
                     <td className="px-5 py-3 text-slate-600">{b.bookingRooms.map((br) => br.room.roomNumber).join(', ')}</td>
                     <td className="px-5 py-3 text-slate-600">{b.bookingRooms.map((br) => br.occupants).join(', ')}</td>
-                    <td className="px-5 py-3 text-slate-600">{b.checkInDate.slice(0, 10)}</td>
-                    <td className="px-5 py-3 text-slate-600">{b.checkOutDate.slice(0, 10)}</td>
+                    <td className="px-5 py-3 text-slate-600">
+                      {b.checkInDate.slice(0, 10)}
+                      {(b.status === 'CHECKED_IN' || b.status === 'CHECKED_OUT') && stayTime(b.checkedInAt, timezone) && (
+                        <span className="ml-1.5 text-xs text-slate-400">{stayTime(b.checkedInAt, timezone)}</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3 text-slate-600">
+                      {b.checkOutDate.slice(0, 10)}
+                      {b.status === 'CHECKED_OUT' && stayTime(b.checkedOutAt, timezone) && (
+                        <span className="ml-1.5 text-xs text-slate-400">{stayTime(b.checkedOutAt, timezone)}</span>
+                      )}
+                    </td>
                     <td className="px-5 py-3"><StatusBadge status={b.status} /></td>
                     <td className="px-5 py-3">
-                      {(editable || canChangeRoom || invoiceId) && (
+                      {(editable || canEditCheckedIn || canChangeRoom || invoiceId) && (
                         <div className="flex items-center gap-3">
+                          {invoiceId && (
+                            <button
+                              onClick={() => setPreviewInvoiceId(invoiceId)}
+                              title="Preview invoice"
+                              className="text-slate-400 hover:text-brand-700"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
+                          )}
                           {invoiceId && (
                             <button
                               onClick={() => handleDownloadInvoice(invoiceId)}
@@ -853,28 +1341,37 @@ export default function BookingsPage() {
                               <Download className="h-4 w-4" />
                             </button>
                           )}
+                          {canEditCheckedIn && (
+                            <button
+                              onClick={() => setPreviewStayId(b.id)}
+                              title="Preview stay"
+                              className="text-slate-400 hover:text-brand-700"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </button>
+                          )}
+                          {(editable || canEditCheckedIn) && (
+                            <button
+                              onClick={() => {
+                                setShowCreateForm(false);
+                                setChangingRoomBooking(null);
+                                setEditingBooking(b);
+                              }}
+                              title={editable ? 'Edit booking' : 'Edit occupants / check-out date'}
+                              className="text-slate-400 hover:text-brand-700"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                          )}
                           {editable && (
-                            <>
-                              <button
-                                onClick={() => {
-                                  setShowCreateForm(false);
-                                  setChangingRoomBooking(null);
-                                  setEditingBooking(b);
-                                }}
-                                title="Edit booking"
-                                className="text-slate-400 hover:text-brand-700"
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </button>
-                              <button
-                                onClick={() => handleCancel(b.id)}
-                                disabled={cancellingId === b.id}
-                                title="Cancel booking"
-                                className="text-slate-400 hover:text-rose-600 disabled:opacity-50"
-                              >
-                                <XCircle className="h-4 w-4" />
-                              </button>
-                            </>
+                            <button
+                              onClick={() => handleCancel(b.id)}
+                              disabled={cancellingId === b.id}
+                              title="Cancel booking"
+                              className="text-slate-400 hover:text-rose-600 disabled:opacity-50"
+                            >
+                              <XCircle className="h-4 w-4" />
+                            </button>
                           )}
                           {canChangeRoom && (
                             <button

@@ -32,7 +32,8 @@ export type NotificationType =
   | 'ROOM_BLOCKED_TOO_LONG'
   | 'ROOM_UNBOOKED_TOO_LONG'
   | 'TASK_NUDGE'
-  | 'SERVICE_REQUEST';
+  | 'SERVICE_REQUEST'
+  | 'ROOM_TURNOVER';
 
 export interface NotificationItem {
   id: string;
@@ -79,6 +80,7 @@ export class NotificationsService {
       unbookedTooLong,
       taskNudges,
       serviceRequests,
+      roomTurnovers,
       dailyBriefing,
     ] = await Promise.all([
       this.getUpcomingCheckIns(hotelId, todayStart, horizonEnd),
@@ -89,6 +91,7 @@ export class NotificationsService {
       this.getUnbookedTooLong(hotelId, now),
       this.getTaskNudges(hotelId, userId),
       this.getServiceRequestAlerts(hotelId, userId),
+      this.getRoomTurnoverAlerts(hotelId, userId),
       this.getDailyBriefing(hotelId, todayStart, tomorrowStart, includeRevenue),
     ]);
 
@@ -108,6 +111,7 @@ export class NotificationsService {
         ...unbookedTooLong,
         ...taskNudges,
         ...serviceRequests,
+        ...roomTurnovers,
       ].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
     ];
 
@@ -123,6 +127,7 @@ export class NotificationsService {
         unbookedTooLong: unbookedTooLong.length,
         taskNudge: taskNudges.length,
         serviceRequest: serviceRequests.length,
+        roomTurnover: roomTurnovers.length,
       },
     };
   }
@@ -239,6 +244,32 @@ export class NotificationsService {
       type: 'SERVICE_REQUEST' as const,
       title: 'Room service requested',
       message: `Room ${t.room.roomNumber} — guest is currently in the room`,
+      timestamp: t.createdAt.toISOString(),
+      dueToday: true,
+    }));
+  }
+
+  /**
+   * Also per-viewer — surfaces a freshly auto-assigned turnover task (see
+   * HousekeepingService.createDirtyTask, fired on checkout and mid-stay room
+   * moves) to the housekeeping staff member it landed on, so they don't have
+   * to keep the board open to know a room is waiting. Excludes serviceRequest
+   * tasks (those get their own, differently-worded alert above) and anything
+   * already nudged (the nudge alert supersedes this one for that task, rather
+   * than showing both for the same room).
+   */
+  private async getRoomTurnoverAlerts(hotelId: string, userId: string): Promise<NotificationItem[]> {
+    const tasks = await this.prisma.housekeepingTask.findMany({
+      where: { room: { hotelId }, assignedToId: userId, serviceRequest: false, nudgedAt: null, status: { not: 'READY' } },
+      include: { room: true },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return tasks.map((t) => ({
+      id: `room-turnover-${t.id}`,
+      type: 'ROOM_TURNOVER' as const,
+      title: 'Room needs cleaning',
+      message: `Room ${t.room.roomNumber} is empty and ready for cleaning`,
       timestamp: t.createdAt.toISOString(),
       dueToday: true,
     }));

@@ -42,11 +42,18 @@ export default function CheckinPage() {
   const [guestSearch, setGuestSearch] = useState('');
   const [hotelPolicy, setHotelPolicy] = useState<{ timezone: string; checkInTime: string; earlyCheckInFee: string } | null>(null);
   const [waiveEarlyFee, setWaiveEarlyFee] = useState<Record<string, boolean>>({});
-  // Alternate rooms offered when a guest's reserved room isn't ready yet
-  // (typically an early arrival — the previous guest hasn't checked out or
-  // housekeeping hasn't finished) so front desk can seat them elsewhere
-  // rather than making them wait. Keyed by booking id.
+  // Alternate rooms offered when a guest's reserved room isn't ready yet —
+  // either it's dirty/occupied, or (a room's housekeeping status doesn't
+  // reflect the reservation calendar) an early arrival's widened stay would
+  // overlap another guest's confirmed booking of the same room — so front
+  // desk can seat them elsewhere rather than hitting a booking conflict.
+  // Keyed by booking id.
   const [altRooms, setAltRooms] = useState<Record<string, AvailableRoom[]>>({});
+  // Whether the guest's originally assigned room is actually free for the
+  // dates this check-in needs (housekeeping-clean AND no reservation
+  // conflict). Undefined until the availability check for that booking
+  // resolves.
+  const [assignedRoomOk, setAssignedRoomOk] = useState<Record<string, boolean>>({});
   const [selectedAltRoom, setSelectedAltRoom] = useState<Record<string, string>>({});
   // Base rate per room type, so alternate-room options can be labeled
   // Upgrade/Downgrade relative to what was actually booked.
@@ -79,16 +86,21 @@ export default function CheckinPage() {
     const today = todayInTimeZone(timezone);
     for (const b of arrivals) {
       if (b.bookingRooms.length !== 1) continue;
-      const room = b.bookingRooms[0].room;
-      if (room.status === 'AVAILABLE') continue;
       if (altRooms[b.id]) continue;
+      const room = b.bookingRooms[0].room;
       apiFetch<{ availableRooms: AvailableRoom[] }>(
         `/rooms/availability?hotelId=${hotelId}&checkIn=${today}&checkOut=${b.checkOutDate.slice(0, 10)}&excludeBookingId=${b.id}`,
       )
         .then((res) => {
+          setAssignedRoomOk((prev) => ({ ...prev, [b.id]: room.status === 'AVAILABLE' && res.availableRooms.some((r) => r.id === room.id) }));
           setAltRooms((prev) => ({ ...prev, [b.id]: res.availableRooms.filter((r) => r.status === 'AVAILABLE' && r.id !== room.id) }));
         })
-        .catch(() => setAltRooms((prev) => ({ ...prev, [b.id]: [] })));
+        .catch(() => {
+          // Availability check failed — fall back to the housekeeping status
+          // alone rather than blocking check-in on a network hiccup.
+          setAssignedRoomOk((prev) => ({ ...prev, [b.id]: room.status === 'AVAILABLE' }));
+          setAltRooms((prev) => ({ ...prev, [b.id]: [] }));
+        });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hotelId, arrivals]);
@@ -168,7 +180,9 @@ export default function CheckinPage() {
         <div className="space-y-3">
           {visibleArrivals.map((b) => {
             const isSingleRoom = b.bookingRooms.length === 1;
-            const notReady = b.bookingRooms.some((br) => br.room.status !== 'AVAILABLE');
+            const notReady = isSingleRoom
+              ? b.bookingRooms[0].room.status !== 'AVAILABLE' || assignedRoomOk[b.id] === false
+              : b.bookingRooms.some((br) => br.room.status !== 'AVAILABLE');
             const canOfferAlt = notReady && isSingleRoom;
             const altOptions = altRooms[b.id];
             const altPicked = selectedAltRoom[b.id];
@@ -224,7 +238,7 @@ export default function CheckinPage() {
                 {canOfferAlt && (
                   <div className="w-full space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
                     <p className="text-sm text-amber-800">
-                      Room {b.bookingRooms[0].room.roomNumber} isn't ready yet — check in to another room instead:
+                      Room {b.bookingRooms[0].room.roomNumber} isn't available for these dates — check in to another room instead:
                     </p>
                     {altOptions === undefined ? (
                       <p className="text-xs text-amber-700">Checking other rooms…</p>

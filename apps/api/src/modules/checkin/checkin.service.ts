@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { PrismaService } from '../../prisma/prisma.service';
 import { todayDateOnlyInTimeZone, localTimeHHmm } from '../../common/date.util';
 import { AuditLogService } from '../audit-logs/audit-log.service';
+import { AvailabilityService } from '../rooms/availability.service';
 import { CheckinDto } from './dto/checkin.dto';
 
 @Injectable()
@@ -9,6 +10,7 @@ export class CheckinService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly auditLog: AuditLogService,
+    private readonly availabilityService: AvailabilityService,
   ) {}
 
   async checkin(dto: CheckinDto, checkedInById: string) {
@@ -36,6 +38,19 @@ export class CheckinService {
         }
         checkInDate = actualCheckIn;
       }
+
+      // An early arrival widens the reserved range back from the booked
+      // checkInDate to today, which can now overlap another booking that
+      // legitimately grabbed this room in between — re-check availability
+      // for the actual range before committing, same as bookings.service's
+      // extend(). Without this the DB's exclusion constraint still catches
+      // it, but as an unhandled 500 instead of a friendly conflict.
+      await this.availabilityService.assertRoomsAvailable(tx, {
+        roomIds: dto.roomAssignments.map((a) => a.roomId),
+        checkIn: checkInDate,
+        checkOut: booking.checkOutDate,
+        excludeBookingId: dto.bookingId,
+      });
 
       for (const assignment of dto.roomAssignments) {
         const room = await tx.room.findUnique({
@@ -73,7 +88,10 @@ export class CheckinService {
         });
       }
 
-      const updated = await tx.booking.update({ where: { id: dto.bookingId }, data: { status: 'CHECKED_IN', checkInDate } });
+      const updated = await tx.booking.update({
+        where: { id: dto.bookingId },
+        data: { status: 'CHECKED_IN', checkInDate, checkedInAt: new Date() },
+      });
 
       await this.auditLog.record(tx, {
         hotelId: booking.hotelId,

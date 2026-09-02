@@ -13,7 +13,10 @@ import { ExtendBookingDto } from './dto/extend-booking.dto';
 import { ChangeRoomBookingDto } from './dto/change-room-booking.dto';
 
 const ACTIVE_STATUSES_BLOCKING_CANCEL = ['CHECKED_IN', 'CHECKED_OUT', 'COMPLETED'];
-const EDITABLE_STATUSES = ['DRAFT', 'CONFIRMED'];
+// CHECKED_IN is editable too, but far more narrowly — see the isCheckedIn
+// branch in update(): checkInDate and room assignment are frozen by then,
+// only occupants and checkOutDate can still move.
+const EDITABLE_STATUSES = ['DRAFT', 'CONFIRMED', 'CHECKED_IN'];
 
 type RoomsSnapshot = { roomId: string; rate: number; occupants: number }[];
 
@@ -112,7 +115,8 @@ export class BookingsService {
       include: {
         bookingRooms: { include: { room: true } },
         guest: { include: GUEST_LOYALTY_INCLUDE },
-        payments: true,
+        payments: { orderBy: { createdAt: 'asc' } },
+        roomCharges: { orderBy: { createdAt: 'asc' } },
         invoice: true,
       },
     });
@@ -188,28 +192,67 @@ export class BookingsService {
         throw new ConflictException({ code: 'INVALID_STATE', message: `Booking in status ${existing.status} can no longer be edited` });
       }
 
+      // Once checked in, checkInDate is the stamped actual arrival (see
+      // CheckinService) and doesn't move retroactively, and a room swap must
+      // go through changeRoom() so pricing/housekeeping/RoomChangeLog stay
+      // consistent — this path only still allows occupants and checkOutDate.
+      const isCheckedIn = existing.status === 'CHECKED_IN';
+      if (isCheckedIn && dto.checkInDate && new Date(dto.checkInDate).getTime() !== existing.checkInDate.getTime()) {
+        throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Check-in date cannot be changed after check-in' });
+      }
+      if (isCheckedIn && dto.rooms) {
+        const existingRoomIds = existing.bookingRooms.map((br) => br.roomId).sort();
+        const requestedRoomIds = [...dto.rooms.map((r) => r.roomId)].sort();
+        if (JSON.stringify(existingRoomIds) !== JSON.stringify(requestedRoomIds)) {
+          throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'Changing rooms on a checked-in booking must go through Change Room' });
+        }
+      }
+
       const checkIn = dto.checkInDate ? new Date(dto.checkInDate) : existing.checkInDate;
       const checkOut = dto.checkOutDate ? new Date(dto.checkOutDate) : existing.checkOutDate;
       if (checkOut <= checkIn) {
         throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'checkOutDate must be after checkInDate' });
       }
 
-      const roomIds = dto.rooms ? dto.rooms.map((r) => r.roomId) : existing.bookingRooms.map((br) => br.roomId);
-      if (dto.rooms) {
-        const rooms = await tx.room.findMany({ where: { id: { in: roomIds }, hotelId: dto.hotelId }, include: { roomType: true } });
-        if (rooms.length !== roomIds.length) {
+      // For a checked-in booking, the rate a guest already agreed to doesn't
+      // silently change here (that's what changeRoom()'s priced, logged move
+      // is for) — only occupants can move; anything unspecified keeps its
+      // current value rather than defaulting to 1.
+      const rooms = isCheckedIn
+        ? dto.rooms?.map((r) => {
+            const existingRoom = existing.bookingRooms.find((br) => br.roomId === r.roomId)!;
+            return { roomId: r.roomId, rate: Number(existingRoom.rateApplied), occupants: r.occupants ?? existingRoom.occupants };
+          })
+        : dto.rooms;
+
+      const roomIds = rooms ? rooms.map((r) => r.roomId) : existing.bookingRooms.map((br) => br.roomId);
+      if (rooms) {
+        const roomRecords = await tx.room.findMany({ where: { id: { in: roomIds }, hotelId: dto.hotelId }, include: { roomType: true } });
+        if (roomRecords.length !== roomIds.length) {
           throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'One or more rooms do not belong to this hotel' });
         }
-        this.assertWithinCapacity(dto.rooms, rooms);
+        this.assertWithinCapacity(rooms, roomRecords);
       }
 
       await this.availabilityService.assertRoomsAvailable(tx, { roomIds, checkIn, checkOut, excludeBookingId: id });
 
-      if (dto.rooms) {
-        await tx.bookingRoom.deleteMany({ where: { bookingId: id } });
-        await tx.bookingRoom.createMany({
-          data: dto.rooms.map((r) => ({ bookingId: id, roomId: r.roomId, rateApplied: r.rate, occupants: r.occupants ?? 1 })),
-        });
+      if (rooms) {
+        if (isCheckedIn) {
+          // Update occupants in place — never delete+recreate BookingRoom
+          // rows here, since RoomChangeLog rows cascade-delete with their
+          // BookingRoom and would silently lose checkout's proration history.
+          for (const input of rooms) {
+            const bookingRoom = existing.bookingRooms.find((br) => br.roomId === input.roomId);
+            if (bookingRoom && input.occupants !== bookingRoom.occupants) {
+              await tx.bookingRoom.update({ where: { id: bookingRoom.id }, data: { occupants: input.occupants } });
+            }
+          }
+        } else {
+          await tx.bookingRoom.deleteMany({ where: { bookingId: id } });
+          await tx.bookingRoom.createMany({
+            data: rooms.map((r) => ({ bookingId: id, roomId: r.roomId, rateApplied: r.rate, occupants: r.occupants ?? 1 })),
+          });
+        }
       }
 
       const updated = await tx.booking.update({

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Ban, Bell, BellRing, CalendarCheck, CalendarClock, Check, DoorOpen, Hourglass, Sunrise, Wrench } from 'lucide-react';
+import { Ban, Bell, BellRing, CalendarCheck, CalendarClock, Check, DoorOpen, Hourglass, Sparkles, Sunrise, Wrench } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 
@@ -36,7 +36,8 @@ type NotificationType =
   | 'ROOM_BLOCKED_TOO_LONG'
   | 'ROOM_UNBOOKED_TOO_LONG'
   | 'TASK_NUDGE'
-  | 'SERVICE_REQUEST';
+  | 'SERVICE_REQUEST'
+  | 'ROOM_TURNOVER';
 
 interface NotificationItem {
   id: string;
@@ -64,6 +65,7 @@ const TYPE_ICON: Record<NotificationType, React.ComponentType<{ className?: stri
   ROOM_UNBOOKED_TOO_LONG: Hourglass,
   TASK_NUDGE: BellRing,
   SERVICE_REQUEST: DoorOpen,
+  ROOM_TURNOVER: Sparkles,
 };
 
 function relativeTime(iso: string) {
@@ -181,6 +183,7 @@ export function NotificationsBell() {
                 const isUnread = !readIds.has(item.id);
                 const isNudge = item.type === 'TASK_NUDGE';
                 const isServiceRequest = item.type === 'SERVICE_REQUEST';
+                const isRoomTurnover = item.type === 'ROOM_TURNOVER';
                 return (
                   <button
                     key={item.id}
@@ -192,12 +195,20 @@ export function NotificationsBell() {
                         ? 'border-amber-100 bg-amber-50/60 hover:bg-amber-50'
                         : isServiceRequest
                           ? 'border-sky-100 bg-sky-50/60 hover:bg-sky-50'
-                          : 'border-slate-50 hover:bg-slate-50'
+                          : isRoomTurnover
+                            ? 'border-emerald-100 bg-emerald-50/60 hover:bg-emerald-50'
+                            : 'border-slate-50 hover:bg-slate-50'
                     }`}
                   >
                     <div
                       className={`relative mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full ${
-                        isNudge ? 'bg-amber-100 text-amber-700' : isServiceRequest ? 'bg-sky-100 text-sky-700' : 'bg-slate-100 text-slate-500'
+                        isNudge
+                          ? 'bg-amber-100 text-amber-700'
+                          : isServiceRequest
+                            ? 'bg-sky-100 text-sky-700'
+                            : isRoomTurnover
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-slate-100 text-slate-500'
                       }`}
                     >
                       <Icon className="h-3.5 w-3.5" />

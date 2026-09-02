@@ -192,7 +192,10 @@ export class CheckoutService {
         },
       });
 
-      await tx.booking.update({ where: { id: booking.id }, data: { status: 'CHECKED_OUT', checkOutDate: actualCheckOut } });
+      await tx.booking.update({
+        where: { id: booking.id },
+        data: { status: 'CHECKED_OUT', checkOutDate: actualCheckOut, checkedOutAt: new Date() },
+      });
 
       for (const br of booking.bookingRooms) {
         await tx.room.update({ where: { id: br.roomId }, data: { status: 'DIRTY' } });

@@ -4,6 +4,7 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 // (esModuleInterop is off project-wide) — this form is the correct runtime-safe one.
 import PDFDocument = require('pdfkit');
 import { PrismaService } from '../../prisma/prisma.service';
+import { localTimeHHmm } from '../../common/date.util';
 
 interface InvoiceLineItem {
   description: string;
@@ -82,13 +83,26 @@ export class InvoicesService {
 
     const roomNumbers = booking.bookingRooms.map((br) => br.room.roomNumber).join(', ');
     doc.fontSize(10).text(`Room ${roomNumbers}`);
-    doc.text(`${booking.checkInDate.toISOString().slice(0, 10)} to ${booking.checkOutDate.toISOString().slice(0, 10)} (${invoice.nights} night${invoice.nights === 1 ? '' : 's'})`);
+    // Times (when known — a booking that never actually checked in has
+    // neither) are the hotel's own local wall-clock, same as the early/late
+    // fee logic in Checkin/CheckoutService, not the server's UTC.
+    const checkInTime = booking.checkedInAt ? localTimeHHmm(booking.checkedInAt, booking.hotel.timezone) : null;
+    const checkOutTime = booking.checkedOutAt ? localTimeHHmm(booking.checkedOutAt, booking.hotel.timezone) : null;
+    doc.text(
+      `${booking.checkInDate.toISOString().slice(0, 10)}${checkInTime ? ` ${checkInTime}` : ''} to ` +
+        `${booking.checkOutDate.toISOString().slice(0, 10)}${checkOutTime ? ` ${checkOutTime}` : ''} ` +
+        `(${invoice.nights} night${invoice.nights === 1 ? '' : 's'})`,
+    );
     doc.moveDown(1);
 
-    function row(label: string, amount: string, opts: { bold?: boolean } = {}) {
+    function row(label: string, amount: string, opts: { bold?: boolean; date?: string } = {}) {
       doc.fontSize(opts.bold ? 11 : 10).font(opts.bold ? 'Helvetica-Bold' : 'Helvetica');
       const y = doc.y;
-      doc.text(label, 50, y);
+      doc.text(label, 50, y, { width: 280 });
+      if (opts.date) {
+        doc.fontSize(8).fillColor('#666').text(opts.date, 335, y + 1, { width: 60 });
+        doc.fillColor('#000').fontSize(opts.bold ? 11 : 10);
+      }
       doc.text(amount, 400, y, { width: 145, align: 'right' });
       doc.moveDown(0.4);
       doc.font('Helvetica');
@@ -97,11 +111,19 @@ export class InvoicesService {
     doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#ddd').stroke();
     doc.moveDown(0.5);
 
+    // Ad-hoc additionalCharges/the late fee/discounts are typed in at
+    // checkout itself and have no date of their own — invoice.issuedAt (the
+    // checkout moment) is the accurate date for all of them. A logged
+    // RoomCharge, by contrast, was added at whatever point during the stay
+    // it actually happened, so it keeps its own createdAt.
+    const checkoutDateStr = invoice.issuedAt.toISOString().slice(0, 10);
     row(`Room charges (${invoice.nights} night${invoice.nights === 1 ? '' : 's'})`, money(invoice.roomSubtotal));
-    for (const charge of booking.roomCharges) row(charge.description, money(charge.amount));
-    for (const item of additionalCharges) row(item.description, money(item.amount));
-    if (Number(invoice.lateCheckOutFee) > 0) row('Late check-out fee', money(invoice.lateCheckOutFee));
-    for (const item of discounts) row(item.description, `-${money(item.amount)}`);
+    for (const charge of booking.roomCharges) {
+      row(charge.description, money(charge.amount), { date: charge.createdAt.toISOString().slice(0, 10) });
+    }
+    for (const item of additionalCharges) row(item.description, money(item.amount), { date: checkoutDateStr });
+    if (Number(invoice.lateCheckOutFee) > 0) row('Late check-out fee', money(invoice.lateCheckOutFee), { date: checkoutDateStr });
+    for (const item of discounts) row(item.description, `-${money(item.amount)}`, { date: checkoutDateStr });
 
     doc.moveTo(50, doc.y).lineTo(545, doc.y).strokeColor('#ddd').stroke();
     doc.moveDown(0.5);

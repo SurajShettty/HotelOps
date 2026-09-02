@@ -275,6 +275,12 @@ model Booking {
   source       BookingSource @default(DIRECT)
   checkInDate  DateTime      @map("check_in_date") @db.Date
   checkOutDate DateTime      @map("check_out_date") @db.Date
+  // Exact moment CheckinService/CheckoutService actually ran — distinct from
+  // checkInDate/checkOutDate above, which are calendar-only (@db.Date) and
+  // can be edited afterward (see BookingsService.update); these are set once,
+  // never revisited, and exist purely to show a time alongside those dates.
+  checkedInAt  DateTime?     @map("checked_in_at")
+  checkedOutAt DateTime?     @map("checked_out_at")
   createdById  String        @map("created_by")
   createdAt    DateTime      @default(now()) @map("created_at")
   // Bumped by Prisma on every `booking.update()` — the "last action taken on
