@@ -698,6 +698,7 @@ export default function CalendarPage() {
   } | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [floorFilter, setFloorFilter] = useState('');
+  const [roomTypeFilter, setRoomTypeFilter] = useState('');
 
   const days = useMemo(() => Array.from({ length: DAYS_SHOWN }, (_, i) => addDays(startDate, i)), [startDate]);
   const { colors: roomTypeColors, types: roomTypes } = useRoomTypeColors(rooms);
@@ -707,7 +708,9 @@ export default function CalendarPage() {
     () => Array.from(new Set(rooms.map((r) => r.floor).filter((f): f is string => !!f))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
     [rooms],
   );
-  const visibleRooms = floorFilter ? rooms.filter((r) => r.floor === floorFilter) : rooms;
+  const visibleRooms = rooms
+    .filter((r) => !floorFilter || r.floor === floorFilter)
+    .filter((r) => !roomTypeFilter || r.roomType.id === roomTypeFilter);
 
   // Small delay before showing the preview so it doesn't flash while the mouse
   // is just passing through a row of cells on its way somewhere else.
@@ -968,16 +971,28 @@ export default function CalendarPage() {
         }
       />
 
-      {floors.length > 0 && (
-        <div className="mb-3 flex items-center gap-2">
-          <Select value={floorFilter} onChange={(e) => setFloorFilter(e.target.value)} className="w-40 text-sm">
-            <option value="">All floors</option>
-            {floors.map((f) => (
-              <option key={f} value={f}>Floor {f}</option>
-            ))}
-          </Select>
-        </div>
-      )}
+      <div className="mb-3 flex items-center gap-2">
+        {roomTypes.length > 0 && (
+          <div className="w-32">
+            <Select value={roomTypeFilter} onChange={(e) => setRoomTypeFilter(e.target.value)} className="text-sm">
+              <option value="">All room types</option>
+              {roomTypes.map(([id, name]) => (
+                <option key={id} value={id}>{name}</option>
+              ))}
+            </Select>
+          </div>
+        )}
+        {floors.length > 0 && (
+          <div className="w-32">
+            <Select value={floorFilter} onChange={(e) => setFloorFilter(e.target.value)} className="text-sm">
+              <option value="">All floors</option>
+              {floors.map((f) => (
+                <option key={f} value={f}>Floor {f}</option>
+              ))}
+            </Select>
+          </div>
+        )}
+      </div>
 
       <div className="mb-2 flex flex-wrap gap-4 text-xs text-slate-500">
         <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded bg-sky-100 ring-1 ring-sky-300" /> Confirmed</span>
@@ -1001,7 +1016,7 @@ export default function CalendarPage() {
       ) : rooms.length === 0 ? (
         <p className="text-sm text-slate-400">No rooms yet — add some from the Rooms page.</p>
       ) : visibleRooms.length === 0 ? (
-        <p className="text-sm text-slate-400">No rooms on this floor.</p>
+        <p className="text-sm text-slate-400">No rooms match these filters.</p>
       ) : (
         <Card className="overflow-x-auto p-0">
           <table className="w-full border-collapse text-sm">
