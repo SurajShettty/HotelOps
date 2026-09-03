@@ -1,13 +1,15 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CheckCircle2, DoorOpen, FileText, LogIn, Search, ShieldCheck, Upload } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { CheckCircle2, DoorOpen, FileText, LogIn, Plus, Search, ShieldCheck, Upload, X } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { formatTime12h, localTimeHHmm, todayInTimeZone } from '@/lib/format';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { GuestBadges, GuestBadgeInfo } from '@/components/ui/guest-badges';
+import { GuestPicker, PickedGuest } from '@/components/ui/guest-picker';
 import { RequireRole } from '@/components/ui/require-role';
 import { RECEPTIONIST_AREA_ROLES } from '@/lib/roles';
 import { ID_DOC_ACCEPT_ATTR, ID_DOCUMENT_TYPES, isIdDocumentPdf, readIdDocumentFile } from '@/lib/id-document';
@@ -40,7 +42,394 @@ interface AvailableRoom {
   id: string;
   roomNumber: string;
   status: string;
-  roomType: { id: string; name: string; baseRate: string };
+  roomType: { id: string; name: string; baseRate: string; maxOccupancy: number };
+}
+
+interface RateQuote {
+  baseRate: number;
+  averageRate: number;
+  blended: boolean;
+}
+
+// Parsed/mutated as UTC throughout — `new Date(iso + 'T00:00:00')` (no Z)
+// parses as local time, and toISOString() then converts back to UTC, which
+// silently rolls the date back a day for any positive UTC offset (e.g.
+// IST) — "+1 day" would come back out as the same day.
+function addDaysIso(iso: string, n: number) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * A guest with no prior reservation, checked in on the spot — creates the
+ * booking (source WALK_IN) and immediately calls /checkin in one step, same
+ * two-call sequence as the Calendar's "Check in now" on an empty cell, just
+ * without a pre-clicked room/date to start from — this form picks both itself.
+ */
+function DirectCheckinForm({
+  hotelId,
+  timezone,
+  onCancel,
+  onDone,
+}: {
+  hotelId: string;
+  timezone: string;
+  onCancel: () => void;
+  onDone: (result: { guestName: string; roomNumber: string; depositAmount: number }) => void;
+}) {
+  const today = todayInTimeZone(timezone);
+  const [pickedGuest, setPickedGuest] = useState<PickedGuest | null>(null);
+  const [checkOutDate, setCheckOutDate] = useState(addDaysIso(today, 1));
+  const [availableRooms, setAvailableRooms] = useState<AvailableRoom[]>([]);
+  const [loadingRooms, setLoadingRooms] = useState(false);
+  const [selectedRoomId, setSelectedRoomId] = useState('');
+  const [occupants, setOccupants] = useState('1');
+  const [rate, setRate] = useState('');
+  const [rateTouched, setRateTouched] = useState(false);
+  const [rateQuote, setRateQuote] = useState<RateQuote | null>(null);
+  const [rateQuoteLoading, setRateQuoteLoading] = useState(false);
+  const [deposit, setDeposit] = useState('');
+  const [idDocType, setIdDocType] = useState(ID_DOCUMENT_TYPES[0]);
+  const [idDocNumber, setIdDocNumber] = useState('');
+  const [idDocUrl, setIdDocUrl] = useState('');
+  const [docUploadError, setDocUploadError] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const selectedRoom = availableRooms.find((r) => r.id === selectedRoomId) ?? null;
+  const overCapacity = !!selectedRoom && Number(occupants) > selectedRoom.roomType.maxOccupancy;
+
+  useEffect(() => {
+    if (!hotelId || !checkOutDate) {
+      setAvailableRooms([]);
+      return;
+    }
+    setLoadingRooms(true);
+    apiFetch<{ availableRooms: AvailableRoom[] }>(`/rooms/availability?hotelId=${hotelId}&checkIn=${today}&checkOut=${checkOutDate}`)
+      .then((res) => {
+        setAvailableRooms(res.availableRooms);
+        setSelectedRoomId((prev) => (prev && res.availableRooms.some((r) => r.id === prev) ? prev : ''));
+      })
+      .catch(() => setAvailableRooms([]))
+      .finally(() => setLoadingRooms(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hotelId, checkOutDate]);
+
+  // Same "instant base-rate fallback, then refine" pattern as elsewhere —
+  // suggest a rate from active pricing rules once a room's picked.
+  useEffect(() => {
+    if (!hotelId || !selectedRoom) {
+      setRateQuote(null);
+      return;
+    }
+    setRateQuoteLoading(true);
+    const timer = setTimeout(() => {
+      apiFetch<RateQuote>(`/pricing-rules/quote-range?hotelId=${hotelId}&roomTypeId=${selectedRoom.roomType.id}&checkIn=${today}&checkOut=${checkOutDate}`)
+        .then((res) => {
+          setRateQuote(res);
+          if (!rateTouched) setRate(String(res.averageRate));
+        })
+        .catch(() => setRateQuote(null))
+        .finally(() => setRateQuoteLoading(false));
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hotelId, selectedRoom?.roomType.id]);
+
+  function handleIdDocChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setDocUploadError('');
+    readIdDocumentFile(file)
+      .then(setIdDocUrl)
+      .catch((err: Error) => setDocUploadError(err.message));
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!pickedGuest?.fullName.trim()) {
+      setError('Enter a guest name');
+      return;
+    }
+    if (!pickedGuest.id && (!pickedGuest.email.trim() || !pickedGuest.phone.trim())) {
+      setError('Enter the guest’s email and phone');
+      return;
+    }
+    if (!selectedRoom) {
+      setError('Select a room');
+      return;
+    }
+    if (overCapacity) {
+      setError(`This room sleeps a maximum of ${selectedRoom.roomType.maxOccupancy}`);
+      return;
+    }
+    if (!idDocType.trim() || !idDocNumber.trim() || !idDocUrl) {
+      setError("Enter the guest's ID document type, number, and upload a photo/scan to check in");
+      return;
+    }
+    if (!(Number(deposit) > 0)) {
+      setError('Enter a deposit amount to check in');
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const guestId =
+        pickedGuest.id ??
+        (
+          await apiFetch<{ id: string }>('/guests', {
+            method: 'POST',
+            body: JSON.stringify({
+              hotelId,
+              fullName: pickedGuest.fullName.trim(),
+              email: pickedGuest.email.trim(),
+              phone: pickedGuest.phone.trim(),
+            }),
+          })
+        ).id;
+
+      const booking = await apiFetch<{ id: string; bookingRooms: { id: string; roomId: string }[] }>('/bookings', {
+        method: 'POST',
+        body: JSON.stringify({
+          hotelId,
+          guestId,
+          checkInDate: today,
+          checkOutDate,
+          rooms: [{ roomId: selectedRoom.id, rate: Number(rate), occupants: Number(occupants) }],
+          source: 'WALK_IN',
+        }),
+      });
+
+      await apiFetch(`/checkin?hotelId=${hotelId}`, {
+        method: 'POST',
+        body: JSON.stringify({
+          bookingId: booking.id,
+          roomAssignments: booking.bookingRooms.map((br) => ({ bookingRoomId: br.id, roomId: br.roomId })),
+          depositAmount: Number(deposit),
+          idDocumentType: idDocType,
+          idDocumentNumber: idDocNumber,
+          idDocumentUrl: idDocUrl,
+        }),
+      });
+
+      onDone({ guestName: pickedGuest.fullName.trim(), roomNumber: selectedRoom.roomNumber, depositAmount: Number(deposit) });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Direct check-in failed');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const idComplete = !!(idDocType.trim() && idDocNumber.trim() && idDocUrl);
+  const depositComplete = Number(deposit) > 0;
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40 bg-slate-900/40" onClick={onCancel} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-popover">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <h3 className="text-sm font-semibold text-slate-900">Direct check-in</h3>
+            <button onClick={onCancel} className="shrink-0 text-slate-400 hover:text-slate-700">
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error && <ErrorBanner>{error}</ErrorBanner>}
+
+            <GuestPicker hotelId={hotelId} value={pickedGuest} onChange={setPickedGuest} />
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label>Check-in</Label>
+                <Input value={today} disabled className="text-sm" />
+              </div>
+              <div>
+                <Label htmlFor="direct-checkout">Check-out</Label>
+                <Input
+                  id="direct-checkout"
+                  type="date"
+                  required
+                  min={addDaysIso(today, 1)}
+                  value={checkOutDate}
+                  onChange={(e) => setCheckOutDate(e.target.value)}
+                  className="text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="direct-room">Room</Label>
+                <Select
+                  id="direct-room"
+                  required
+                  value={selectedRoomId}
+                  onChange={(e) => {
+                    setSelectedRoomId(e.target.value);
+                    setRateTouched(false);
+                    // Instant fallback so the field is never left blank —
+                    // the pricing-rules quote effect below refines this once
+                    // it resolves, but shouldn't be the only thing setting it.
+                    const room = availableRooms.find((r) => r.id === e.target.value);
+                    if (room) setRate(String(Number(room.roomType.baseRate)));
+                  }}
+                  className="text-sm"
+                >
+                  <option value="" disabled>
+                    {loadingRooms ? 'Checking availability…' : 'Select an available room'}
+                  </option>
+                  {availableRooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      Room {r.roomNumber} — {r.roomType.name} ({r.roomType.baseRate}/night)
+                    </option>
+                  ))}
+                </Select>
+                {!loadingRooms && availableRooms.length === 0 && (
+                  <p className="mt-1 text-xs text-rose-600">No rooms are free for these dates.</p>
+                )}
+              </div>
+              <div>
+                <Label htmlFor="direct-occupants">Occupants</Label>
+                <Input
+                  id="direct-occupants"
+                  type="number"
+                  min={1}
+                  required
+                  value={occupants}
+                  onChange={(e) => setOccupants(e.target.value)}
+                  className="text-sm"
+                />
+              </div>
+            </div>
+            {overCapacity && selectedRoom && <p className="text-xs text-rose-600">Sleeps a maximum of {selectedRoom.roomType.maxOccupancy}.</p>}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="direct-rate">Rate/night</Label>
+                <Input
+                  id="direct-rate"
+                  type="number"
+                  min={0}
+                  step="any"
+                  required
+                  value={rate}
+                  onChange={(e) => {
+                    setRateTouched(true);
+                    setRate(e.target.value);
+                  }}
+                  className="text-sm"
+                />
+                {rateQuoteLoading ? (
+                  <p className="mt-1 text-xs text-slate-400">Checking pricing rules…</p>
+                ) : rateQuote && (rateQuote.averageRate !== rateQuote.baseRate || rateQuote.blended) ? (
+                  <p className="mt-1 text-xs text-slate-400">
+                    Pricing rules suggest {rateQuote.averageRate}
+                    {rateQuote.blended ? ' (varies by night — averaged)' : ''}
+                  </p>
+                ) : null}
+              </div>
+              <div>
+                <Label htmlFor="direct-deposit">Deposit *</Label>
+                <Input
+                  id="direct-deposit"
+                  type="number"
+                  min={0.01}
+                  step="any"
+                  required
+                  placeholder="0"
+                  value={deposit}
+                  onChange={(e) => setDeposit(e.target.value)}
+                  className="text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-2.5">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label htmlFor="direct-id-type">ID document type</Label>
+                  <Select id="direct-id-type" value={idDocType} onChange={(e) => setIdDocType(e.target.value)} className="text-sm">
+                    {ID_DOCUMENT_TYPES.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="direct-id-number">ID number</Label>
+                  <Input
+                    id="direct-id-number"
+                    placeholder="Document number"
+                    value={idDocNumber}
+                    onChange={(e) => setIdDocNumber(e.target.value)}
+                    className="text-sm"
+                  />
+                </div>
+              </div>
+              <div>
+                <Label htmlFor="direct-id-doc">
+                  ID document photo/scan {!idDocUrl && <span className="text-rose-600">(required)</span>}
+                </Label>
+                <div className="flex items-center gap-2">
+                  {idDocUrl ? (
+                    isIdDocumentPdf(idDocUrl) ? (
+                      <a
+                        href={idDocUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 hover:text-brand-700"
+                      >
+                        <FileText className="h-4 w-4" />
+                      </a>
+                    ) : (
+                      <a href={idDocUrl} target="_blank" rel="noreferrer" className="shrink-0">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={idDocUrl} alt="ID document" className="h-9 w-9 rounded-lg border border-slate-200 object-cover" />
+                      </a>
+                    )
+                  ) : (
+                    <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-dashed border-slate-300 text-slate-300">
+                      <Upload className="h-4 w-4" />
+                    </span>
+                  )}
+                  <label className="inline-flex cursor-pointer items-center rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">
+                    {idDocUrl ? 'Replace' : 'Upload'}
+                    <input id="direct-id-doc" type="file" accept={ID_DOC_ACCEPT_ATTR} onChange={handleIdDocChange} className="hidden" />
+                  </label>
+                  {docUploadError && <span className="text-xs text-rose-600">{docUploadError}</span>}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                type="submit"
+                disabled={submitting || !selectedRoom || !idComplete || !depositComplete}
+                title={
+                  !selectedRoom
+                    ? 'Select a room'
+                    : !idComplete
+                      ? "Upload the guest's ID document, type, and number to check in"
+                      : !depositComplete
+                        ? 'Enter a deposit amount to check in'
+                        : undefined
+                }
+              >
+                {submitting ? 'Checking in…' : 'Check In'}
+              </Button>
+              <button type="button" onClick={onCancel} className="text-sm text-slate-400 hover:text-slate-700">
+                Cancel
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
 }
 
 export default function CheckinPage() {
@@ -51,6 +440,8 @@ export default function CheckinPage() {
   const [deposits, setDeposits] = useState<Record<string, string>>({});
   const [checkingInId, setCheckingInId] = useState<string | null>(null);
   const [guestSearch, setGuestSearch] = useState('');
+  const [showDirectCheckin, setShowDirectCheckin] = useState(false);
+  const [directCheckinSuccess, setDirectCheckinSuccess] = useState<{ guestName: string; roomNumber: string; depositAmount: number } | null>(null);
   // Bookings that were just checked in this session — kept out of `reload()`
   // (which would otherwise drop them from `arrivals` the instant their status
   // moves off CONFIRMED) until the receptionist dismisses the summary below,
@@ -275,8 +666,45 @@ export default function CheckinPage() {
       <PageHeader
         title="Check-In"
         subtitle={`Confirmed bookings waiting to arrive.${hotelPolicy ? ` Standard check-in from ${formatTime12h(hotelPolicy.checkInTime)}.` : ''}`}
+        action={
+          <Button onClick={() => setShowDirectCheckin(true)}>
+            <Plus className="h-4 w-4" /> Direct Check-In
+          </Button>
+        }
       />
       {error && <div className="mb-4"><ErrorBanner>{error}</ErrorBanner></div>}
+
+      {directCheckinSuccess && (
+        <Card className="mb-4 flex flex-wrap items-center justify-between gap-4 p-5">
+          <div className="flex items-center gap-3">
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-700">
+              <CheckCircle2 className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="text-sm font-medium text-slate-900">
+                {directCheckinSuccess.guestName} checked in
+                <span className="ml-1.5 tabular-nums text-slate-500">— Room {directCheckinSuccess.roomNumber}</span>
+              </p>
+              <p className="mt-0.5 text-xs text-slate-500">Deposit collected: {directCheckinSuccess.depositAmount}</p>
+            </div>
+          </div>
+          <Button variant="secondary" onClick={() => setDirectCheckinSuccess(null)}>
+            Done
+          </Button>
+        </Card>
+      )}
+
+      {showDirectCheckin && hotelId && (
+        <DirectCheckinForm
+          hotelId={hotelId}
+          timezone={timezone}
+          onCancel={() => setShowDirectCheckin(false)}
+          onDone={(result) => {
+            setShowDirectCheckin(false);
+            setDirectCheckinSuccess(result);
+          }}
+        />
+      )}
 
       {arrivals.length > 0 && (
         <Card className="mb-4 p-3">

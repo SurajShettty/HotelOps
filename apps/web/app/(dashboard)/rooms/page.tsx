@@ -165,9 +165,13 @@ function RoomChargesPopover({ room, anchor, onClose }: { room: Room; anchor: Anc
   );
 }
 
+// Parsed/mutated as UTC throughout — `new Date(iso + 'T00:00:00')` (no Z)
+// parses as local time, and toISOString() then converts back to UTC, which
+// silently rolls the date back a day for any positive UTC offset (e.g.
+// IST) — "+1 day" would come back out as the same day.
 function addDaysIso(iso: string, n: number) {
-  const d = new Date(`${iso}T00:00:00`);
-  d.setDate(d.getDate() + n);
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 }
 
