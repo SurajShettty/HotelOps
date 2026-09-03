@@ -6,7 +6,7 @@ import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { Card, ErrorBanner, PageHeader } from '@/components/ui/primitives';
 import { RequireRole } from '@/components/ui/require-role';
-import { HOUSEKEEPING_AREA_ROLES } from '@/lib/roles';
+import { HOUSEKEEPING_AREA_ROLES, roleAtHotel, useRoleGrants } from '@/lib/roles';
 
 function initials(name: string) {
   return name.split(' ').map((p) => p[0]).slice(0, 2).join('').toUpperCase();
@@ -46,6 +46,12 @@ const COLUMNS: { key: Task['status']; label: string; next?: Task['status'] }[] =
 
 export default function HousekeepingPage() {
   const { hotelId, ready } = useCurrentHotel();
+  const roleGrants = useRoleGrants();
+  // Housekeeping staff can work a task through the columns but not hand it
+  // off to someone else — mirrors the API's PATCH /assign restriction
+  // (@Roles excludes HOUSEKEEPING there), just surfaced here so they see a
+  // plain label instead of a control that would 403.
+  const canReassign = roleAtHotel(roleGrants, hotelId) !== 'HOUSEKEEPING';
   const [tasks, setTasks] = useState<Task[]>([]);
   const [staff, setStaff] = useState<StaffOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -77,7 +83,7 @@ export default function HousekeepingPage() {
     setError(null);
     setMovingId(task.id);
     try {
-      await apiFetch(`/housekeeping/tasks/${task.id}?hotelId=${hotelId}`, { method: 'PATCH', body: JSON.stringify({ status: next }) });
+      await apiFetch(`/housekeeping/tasks/${task.id}/status?hotelId=${hotelId}`, { method: 'PATCH', body: JSON.stringify({ status: next }) });
       reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to update task');
@@ -90,7 +96,7 @@ export default function HousekeepingPage() {
     setError(null);
     setAssigningId(task.id);
     try {
-      await apiFetch(`/housekeeping/tasks/${task.id}?hotelId=${hotelId}`, { method: 'PATCH', body: JSON.stringify({ assignedToId: userId || null }) });
+      await apiFetch(`/housekeeping/tasks/${task.id}/assign?hotelId=${hotelId}`, { method: 'PATCH', body: JSON.stringify({ assignedToId: userId || null }) });
       reload();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to assign staff');
@@ -173,24 +179,30 @@ export default function HousekeepingPage() {
                             >
                               {assignedStaff ? initials(assignedStaff.fullName) : <UserRound className="h-3 w-3" />}
                             </div>
-                            <div className="relative min-w-0 flex-1">
-                              <select
-                                value={t.assignedToId ?? ''}
-                                onChange={(e) => assign(t, e.target.value)}
-                                disabled={assigningId === t.id}
-                                className={`w-full cursor-pointer appearance-none truncate rounded-full border py-1 pl-2.5 pr-6 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:opacity-50 ${
-                                  assignedStaff
-                                    ? 'border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100'
-                                    : 'border-dashed border-slate-300 bg-white text-slate-400 hover:border-slate-400'
-                                }`}
-                              >
-                                <option value="">Unassigned</option>
-                                {assignOptions.map((s) => (
-                                  <option key={s.id} value={s.id}>{s.fullName}</option>
-                                ))}
-                              </select>
-                              <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 opacity-60" />
-                            </div>
+                            {canReassign ? (
+                              <div className="relative min-w-0 flex-1">
+                                <select
+                                  value={t.assignedToId ?? ''}
+                                  onChange={(e) => assign(t, e.target.value)}
+                                  disabled={assigningId === t.id}
+                                  className={`w-full cursor-pointer appearance-none truncate rounded-full border py-1 pl-2.5 pr-6 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-brand-100 disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    assignedStaff
+                                      ? 'border-brand-200 bg-brand-50 text-brand-700 hover:bg-brand-100'
+                                      : 'border-dashed border-slate-300 bg-white text-slate-400 hover:border-slate-400'
+                                  }`}
+                                >
+                                  <option value="">Unassigned</option>
+                                  {assignOptions.map((s) => (
+                                    <option key={s.id} value={s.id}>{s.fullName}</option>
+                                  ))}
+                                </select>
+                                <ChevronDown className="pointer-events-none absolute right-2 top-1/2 h-3 w-3 -translate-y-1/2 opacity-60" />
+                              </div>
+                            ) : (
+                              <span className="truncate text-xs font-medium text-slate-600">
+                                {assignedStaff ? assignedStaff.fullName : 'Unassigned'}
+                              </span>
+                            )}
                           </div>
                           {col.next && (
                             <button

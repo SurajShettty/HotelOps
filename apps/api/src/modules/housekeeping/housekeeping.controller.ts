@@ -16,13 +16,27 @@ export class HousekeepingController {
   // `hotelId` query param is read by RolesGuard for scoping only, same
   // convention as PATCH /rooms/:id/floor — task update is keyed by task id
   // and doesn't otherwise need it.
-  @Patch(':id')
-  updateTask(
+  @Patch(':id/status')
+  updateStatus(
     @Param('id') id: string,
-    @Body() body: { status?: 'DIRTY' | 'IN_PROGRESS' | 'INSPECTED' | 'READY'; assignedToId?: string | null },
+    @Body('status') status: 'DIRTY' | 'IN_PROGRESS' | 'INSPECTED' | 'READY',
     @CurrentUser() user: CurrentUserPayload,
   ) {
-    return this.housekeepingService.updateTask(id, body, user.id);
+    return this.housekeepingService.updateTask(id, { status }, user.id);
+  }
+
+  // Narrower than the controller's class-level @Roles — deliberately excludes
+  // HOUSEKEEPING: whoever a task is assigned to can work it and move it
+  // through the columns above, but can't hand it off to a different staff
+  // member themselves. Reassigning is front desk/management's call.
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER', 'RECEPTIONIST')
+  @Patch(':id/assign')
+  assign(
+    @Param('id') id: string,
+    @Body('assignedToId') assignedToId: string | null,
+    @CurrentUser() user: CurrentUserPayload,
+  ) {
+    return this.housekeepingService.updateTask(id, { assignedToId }, user.id);
   }
 
   // Narrower than the controller's class-level @Roles — the people who'd
