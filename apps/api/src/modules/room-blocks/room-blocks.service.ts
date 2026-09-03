@@ -58,6 +58,45 @@ export class RoomBlocksService {
     return this.prisma.roomBlock.findMany({ where: { roomId }, orderBy: { startDate: 'asc' } });
   }
 
+  /**
+   * Changes how long a block runs — the "until" date is meant to be editable
+   * (a maintenance job overruns, or wraps up early) rather than requiring a
+   * delete-and-recreate. Only extending the block needs a fresh availability
+   * check, against just the newly-added window: the original [startDate,
+   * endDate) was already guaranteed conflict-free when the block was created,
+   * and shrinking it can only relax that, never violate it.
+   */
+  async updateEndDate(id: string, endDate: string, actorId: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const block = await tx.roomBlock.findUnique({ where: { id }, include: { room: { select: { hotelId: true } } } });
+      if (!block) throw new NotFoundException('Room block not found');
+
+      const newEndDate = new Date(endDate);
+      if (newEndDate <= block.startDate) {
+        throw new BadRequestException({ code: 'VALIDATION_ERROR', message: 'endDate must be after startDate' });
+      }
+      if (newEndDate > block.endDate) {
+        await this.availabilityService.assertRoomsAvailable(tx, {
+          roomIds: [block.roomId],
+          checkIn: block.endDate,
+          checkOut: newEndDate,
+        });
+      }
+
+      const after = await tx.roomBlock.update({ where: { id }, data: { endDate: newEndDate } });
+      await this.auditLog.record(tx, {
+        hotelId: block.room.hotelId,
+        actorId,
+        entity: 'RoomBlock',
+        entityId: id,
+        action: 'UPDATE',
+        before: { endDate: block.endDate.toISOString().slice(0, 10) },
+        after: { endDate: after.endDate.toISOString().slice(0, 10) },
+      });
+      return after;
+    });
+  }
+
   async remove(id: string, actorId: string) {
     const block = await this.prisma.roomBlock.findUnique({ where: { id }, include: { room: { select: { hotelId: true } } } });
     if (!block) throw new NotFoundException('Room block not found');

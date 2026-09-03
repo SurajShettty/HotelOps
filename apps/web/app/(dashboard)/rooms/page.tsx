@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Bed, Check, ChevronDown, LayoutGrid, List, Pencil, Plus, Receipt, Sparkles, Trash2 } from 'lucide-react';
+import { Bed, Check, ChevronDown, LayoutGrid, List, Pencil, Plus, Receipt, Sparkles, Trash2, Wrench } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
+import { todayInTimeZone } from '@/lib/format';
 import { Button, Card, EmptyState, ErrorBanner, Input, Label, PageHeader, Select } from '@/components/ui/primitives';
 import { StatusBadge } from '@/components/ui/status-badge';
 import { AmenitiesEditor, AmenitiesList } from '@/components/ui/amenities';
@@ -16,6 +17,16 @@ const STATUS_OPTIONS = [
   { value: 'OCCUPIED', label: 'Occupied' },
   { value: 'DIRTY', label: 'Dirty' },
   { value: 'OUT_OF_ORDER', label: 'Out of order' },
+];
+
+// Same reasons/values as the Calendar's "Block room" — a block created here
+// is the exact same RoomBlock the Calendar reads, so they always agree on
+// which rooms are unavailable and why.
+const BLOCK_REASONS: { value: string; label: string }[] = [
+  { value: 'MAINTENANCE', label: 'Maintenance' },
+  { value: 'RENOVATION', label: 'Renovation' },
+  { value: 'VIP', label: 'VIP hold' },
+  { value: 'INTERNAL', label: 'Internal' },
 ];
 
 interface RoomType {
@@ -33,6 +44,14 @@ interface Room {
   status: string;
   floor: string | null;
   roomType: RoomType;
+}
+
+interface RoomBlock {
+  id: string;
+  roomId: string;
+  reason: string;
+  startDate: string;
+  endDate: string;
 }
 
 interface RoomCharge {
@@ -146,10 +165,195 @@ function RoomChargesPopover({ room, anchor, onClose }: { room: Room; anchor: Anc
   );
 }
 
+function addDaysIso(iso: string, n: number) {
+  const d = new Date(`${iso}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Takes a room out of service by creating a RoomBlock — the same record the
+ * Calendar's "Block room" creates and reads, so a block made here shows up
+ * there immediately (and vice versa) instead of the two views ever disagreeing.
+ * assertRoomsAvailable (run server-side on create) already refuses this if
+ * the room has an active booking, and the same check already keeps a blocked
+ * room out of every availability/booking search.
+ */
+function BlockRoomPopover({
+  room,
+  hotelId,
+  today,
+  anchor,
+  onClose,
+  onDone,
+}: {
+  room: Room;
+  hotelId: string;
+  today: string;
+  anchor: Anchor;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [reason, setReason] = useState(BLOCK_REASONS[0].value);
+  const [endDate, setEndDate] = useState(addDaysIso(today, 1));
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleConfirm() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await apiFetch('/rooms/block', {
+        method: 'POST',
+        body: JSON.stringify({ hotelId, roomId: room.id, reason, startDate: today, endDate }),
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to block room');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        style={{ top: anchor.top, left: anchor.left }}
+        className="fixed z-50 w-64 space-y-3 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
+      >
+        <p className="text-xs font-medium text-slate-500">Block Room {room.roomNumber} from {today}</p>
+        {error && <ErrorBanner>{error}</ErrorBanner>}
+        <div>
+          <Label htmlFor={`block-reason-${room.id}`}>Reason</Label>
+          <Select id={`block-reason-${room.id}`} value={reason} onChange={(e) => setReason(e.target.value)} className="text-sm">
+            {BLOCK_REASONS.map((r) => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </Select>
+        </div>
+        <div>
+          <Label htmlFor={`block-until-${room.id}`}>Until</Label>
+          <Input id={`block-until-${room.id}`} type="date" required min={addDaysIso(today, 1)} value={endDate} onChange={(e) => setEndDate(e.target.value)} className="text-sm" />
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="text-xs text-slate-400 hover:text-slate-700">Cancel</button>
+          <button
+            onClick={handleConfirm}
+            disabled={submitting}
+            className="rounded-lg bg-rose-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-rose-700 disabled:opacity-50"
+          >
+            {submitting ? 'Blocking…' : 'Block room'}
+          </button>
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
+/** Lets the "until" date on an active block be pushed out or pulled in, or the block removed entirely — without a delete-and-recreate round trip. */
+function EditBlockPopover({
+  block,
+  hotelId,
+  anchor,
+  onClose,
+  onDone,
+}: {
+  block: RoomBlock;
+  hotelId: string;
+  anchor: Anchor;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const [endDate, setEndDate] = useState(block.endDate.slice(0, 10));
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSave() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await apiFetch(`/rooms/block/${block.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ hotelId, endDate }),
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to update block');
+      setSubmitting(false);
+    }
+  }
+
+  async function handleRemove() {
+    setSubmitting(true);
+    setError(null);
+    try {
+      await apiFetch(`/rooms/block/${block.id}?hotelId=${hotelId}`, { method: 'DELETE' });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to remove block');
+      setSubmitting(false);
+    }
+  }
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div
+        style={{ top: anchor.top, left: anchor.left }}
+        className="fixed z-50 w-64 space-y-3 rounded-lg border border-slate-200 bg-white p-3 text-left shadow-popover"
+      >
+        <p className="text-xs font-medium text-slate-500">
+          {BLOCK_REASONS.find((r) => r.value === block.reason)?.label ?? block.reason} · since {block.startDate.slice(0, 10)}
+        </p>
+        {error && <ErrorBanner>{error}</ErrorBanner>}
+        <div>
+          <Label htmlFor={`edit-block-until-${block.id}`}>Until</Label>
+          <Input
+            id={`edit-block-until-${block.id}`}
+            type="date"
+            required
+            min={addDaysIso(block.startDate.slice(0, 10), 1)}
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="text-sm"
+          />
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            onClick={handleRemove}
+            disabled={submitting}
+            className="text-xs font-medium text-rose-600 hover:underline disabled:opacity-50"
+          >
+            Remove block
+          </button>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="text-xs text-slate-400 hover:text-slate-700">Cancel</button>
+            <button
+              onClick={handleSave}
+              disabled={submitting}
+              className="rounded-lg bg-brand-800 px-2.5 py-1 text-xs font-medium text-white hover:bg-brand-900 disabled:opacity-50"
+            >
+              {submitting ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 export default function RoomsPage() {
-  const { hotelId, ready } = useCurrentHotel();
+  const { hotelId, ready, timezone } = useCurrentHotel();
   const [roomTypes, setRoomTypes] = useState<RoomType[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  // Room id -> the block currently in effect (today falls within its date
+  // range) — the same RoomBlock rows the Calendar reads, so this list and
+  // the Calendar always agree on which rooms are unavailable and why.
+  const [activeBlockByRoomId, setActiveBlockByRoomId] = useState<Map<string, RoomBlock>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -176,6 +380,8 @@ export default function RoomsPage() {
   const [activeChargeRoom, setActiveChargeRoom] = useState<{ room: Room; anchor: Anchor } | null>(null);
   const [requestingServiceId, setRequestingServiceId] = useState<string | null>(null);
   const [serviceRequestedIds, setServiceRequestedIds] = useState<Set<string>>(new Set());
+  const [blockRoomTarget, setBlockRoomTarget] = useState<{ room: Room; anchor: Anchor } | null>(null);
+  const [editBlockTarget, setEditBlockTarget] = useState<{ block: RoomBlock; anchor: Anchor } | null>(null);
 
   async function handleRequestService(room: Room) {
     if (!hotelId) return;
@@ -204,10 +410,19 @@ export default function RoomsPage() {
       apiFetch<RoomType[]>(`/room-types?hotelId=${hotelId}`),
       apiFetch<Room[]>(`/rooms?${params.toString()}`),
     ])
-      .then(([types, roomsData]) => {
+      .then(async ([types, roomsData]) => {
         setRoomTypes(types);
         setRooms(roomsData);
         if (!newRoomTypeId && types.length > 0) setNewRoomTypeId(types[0].id);
+
+        const today = todayInTimeZone(timezone);
+        const blocksPerRoom = await Promise.all(roomsData.map((r) => apiFetch<RoomBlock[]>(`/rooms/block?roomId=${r.id}`)));
+        const activeByRoomId = new Map<string, RoomBlock>();
+        blocksPerRoom.forEach((blocks, i) => {
+          const active = blocks.find((bl) => bl.startDate.slice(0, 10) <= today && today < bl.endDate.slice(0, 10));
+          if (active) activeByRoomId.set(roomsData[i].id, active);
+        });
+        setActiveBlockByRoomId(activeByRoomId);
       })
       .finally(() => setLoading(false));
   }
@@ -511,40 +726,83 @@ export default function RoomsPage() {
                       {r.roomType.baseOccupancy}–{r.roomType.maxOccupancy} guests
                     </td>
                     <td className="px-5 py-3"><AmenitiesList amenities={r.roomType.amenities} /></td>
-                    <td className="px-5 py-3"><StatusBadge status={r.status} /></td>
                     <td className="px-5 py-3">
-                      {r.status === 'OCCUPIED' && (
-                        <div className="flex items-center gap-3">
+                      {(() => {
+                        const activeBlock = activeBlockByRoomId.get(r.id);
+                        const reasonLabel = activeBlock ? BLOCK_REASONS.find((b) => b.value === activeBlock.reason)?.label ?? activeBlock.reason : undefined;
+                        return (
+                          <StatusBadge
+                            status={activeBlock ? 'OUT_OF_ORDER' : r.status}
+                            label={activeBlock ? `Blocked — ${reasonLabel}` : undefined}
+                          />
+                        );
+                      })()}
+                    </td>
+                    <td className="px-5 py-3">
+                      <div className="flex items-center gap-3">
+                        {r.status === 'OCCUPIED' && (
+                          <>
+                            <button
+                              type="button"
+                              title="Room charges"
+                              onClick={(e) => {
+                                const rect = e.currentTarget.getBoundingClientRect();
+                                const POPOVER_WIDTH = 288;
+                                const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
+                                setActiveChargeRoom({ room: r, anchor: { top: rect.bottom + 4, left } });
+                              }}
+                              className="flex items-center gap-1 text-slate-400 hover:text-brand-700"
+                            >
+                              <Receipt className="h-4 w-4" />
+                            </button>
+                            {serviceRequestedIds.has(r.id) ? (
+                              <span className="flex items-center gap-1 text-xs font-medium text-emerald-600" title="Housekeeping has been notified">
+                                <Check className="h-3.5 w-3.5" /> Requested
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                title="Request room service"
+                                onClick={() => handleRequestService(r)}
+                                disabled={requestingServiceId === r.id}
+                                className="flex items-center gap-1 text-slate-400 hover:text-brand-700 disabled:opacity-50"
+                              >
+                                <Sparkles className="h-4 w-4" />
+                              </button>
+                            )}
+                          </>
+                        )}
+                        {!activeBlockByRoomId.has(r.id) && (r.status === 'AVAILABLE' || r.status === 'DIRTY') && (
                           <button
                             type="button"
-                            title="Room charges"
+                            title="Block room (maintenance, renovation, etc.)"
                             onClick={(e) => {
                               const rect = e.currentTarget.getBoundingClientRect();
-                              const POPOVER_WIDTH = 288;
+                              const POPOVER_WIDTH = 256;
                               const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
-                              setActiveChargeRoom({ room: r, anchor: { top: rect.bottom + 4, left } });
+                              setBlockRoomTarget({ room: r, anchor: { top: rect.bottom + 4, left } });
+                            }}
+                            className="flex items-center gap-1 text-slate-400 hover:text-rose-600"
+                          >
+                            <Wrench className="h-4 w-4" />
+                          </button>
+                        )}
+                        {activeBlockByRoomId.has(r.id) && (
+                          <button
+                            type="button"
+                            title="Edit block"
+                            onClick={(e) => {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const POPOVER_WIDTH = 256;
+                              const left = Math.min(rect.left, window.innerWidth - POPOVER_WIDTH - 16);
+                              setEditBlockTarget({ block: activeBlockByRoomId.get(r.id)!, anchor: { top: rect.bottom + 4, left } });
                             }}
                             className="flex items-center gap-1 text-slate-400 hover:text-brand-700"
                           >
-                            <Receipt className="h-4 w-4" />
+                            <Pencil className="h-4 w-4" />
                           </button>
-                          {serviceRequestedIds.has(r.id) ? (
-                            <span className="flex items-center gap-1 text-xs font-medium text-emerald-600" title="Housekeeping has been notified">
-                              <Check className="h-3.5 w-3.5" /> Requested
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              title="Request room service"
-                              onClick={() => handleRequestService(r)}
-                              disabled={requestingServiceId === r.id}
-                              className="flex items-center gap-1 text-slate-400 hover:text-brand-700 disabled:opacity-50"
-                            >
-                              <Sparkles className="h-4 w-4" />
-                            </button>
-                          )}
-                        </div>
-                      )}
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -553,6 +811,33 @@ export default function RoomsPage() {
           </Card>
         )}
       </div>
+
+      {blockRoomTarget && hotelId && (
+        <BlockRoomPopover
+          room={blockRoomTarget.room}
+          hotelId={hotelId}
+          today={todayInTimeZone(timezone)}
+          anchor={blockRoomTarget.anchor}
+          onClose={() => setBlockRoomTarget(null)}
+          onDone={() => {
+            setBlockRoomTarget(null);
+            reload();
+          }}
+        />
+      )}
+
+      {editBlockTarget && hotelId && (
+        <EditBlockPopover
+          block={editBlockTarget.block}
+          hotelId={hotelId}
+          anchor={editBlockTarget.anchor}
+          onClose={() => setEditBlockTarget(null)}
+          onDone={() => {
+            setEditBlockTarget(null);
+            reload();
+          }}
+        />
+      )}
 
       {activeChargeRoom && (
         <RoomChargesPopover

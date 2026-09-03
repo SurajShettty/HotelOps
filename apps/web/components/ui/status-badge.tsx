@@ -26,11 +26,11 @@ function toLabel(status: string) {
     .join(' ');
 }
 
-export function StatusBadge({ status }: { status: string }) {
+export function StatusBadge({ status, label }: { status: string; label?: string }) {
   const style = STATUS_STYLES[status] ?? 'bg-slate-100 text-slate-600 ring-slate-200';
   return (
     <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${style}`}>
-      {toLabel(status)}
+      {label ?? toLabel(status)}
     </span>
   );
 }

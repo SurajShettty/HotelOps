@@ -1,8 +1,9 @@
-import { Body, Controller, Delete, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, CurrentUserPayload } from '../../common/decorators/current-user.decorator';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { RoomBlocksService } from './room-blocks.service';
 import { CreateRoomBlockDto } from './dto/create-room-block.dto';
+import { UpdateRoomBlockDto } from './dto/update-room-block.dto';
 
 @Controller('rooms/block')
 export class RoomBlocksController {
@@ -21,6 +22,14 @@ export class RoomBlocksController {
   @Get()
   findAllForRoom(@Query('roomId') roomId: string) {
     return this.roomBlocksService.findAllForRoom(roomId);
+  }
+
+  // `hotelId` in the body is read by RolesGuard for scoping only, same
+  // convention as the DELETE route below — update is keyed by block id.
+  @Roles('SUPER_ADMIN', 'OWNER', 'MANAGER')
+  @Patch(':id')
+  update(@Param('id') id: string, @Body() dto: UpdateRoomBlockDto, @CurrentUser() user: CurrentUserPayload) {
+    return this.roomBlocksService.updateEndDate(id, dto.endDate, user.id);
   }
 
   // `hotelId` is read as a query param purely for RolesGuard scoping (RoomBlock

@@ -70,7 +70,13 @@ export class DashboardService {
           hotelId,
           status: { notIn: ['CANCELLED', 'NO_SHOW', 'DRAFT'] },
           checkInDate: { lt: tomorrowStart },
-          checkOutDate: { gt: todayStart },
+          // A CHECKED_IN booking still occupies its room regardless of its
+          // *planned* checkOutDate — occupiesRoomToday below is what actually
+          // decides that case (checkInDate <= today, guest hasn't checked out
+          // yet). Filtering on checkOutDate > todayStart here too would drop
+          // exactly those rows — a guest due out today but still in the room —
+          // before occupiesRoomToday ever got a chance to see them.
+          OR: [{ checkOutDate: { gt: todayStart } }, { status: 'CHECKED_IN' }],
         },
         select: { status: true, checkInDate: true, checkOutDate: true, bookingRooms: { select: { roomId: true } } },
       }),

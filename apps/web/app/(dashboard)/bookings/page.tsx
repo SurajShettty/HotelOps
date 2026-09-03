@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowLeftRight, CalendarRange, DoorOpen, Download, Eye, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, CalendarRange, DoorOpen, Download, Eye, LogIn, LogOut, Pencil, Plus, Search, X, XCircle } from 'lucide-react';
 import { apiFetch, ApiError, downloadFile } from '@/lib/api';
 import { useCurrentHotel } from '@/lib/hotel-context';
 import { todayInTimeZone, localTimeHHmm, formatTime12h } from '@/lib/format';
@@ -50,6 +50,8 @@ interface Booking {
   } & GuestBadgeInfo;
   bookingRooms: { id: string; occupants: number; rateApplied: string; room: { id: string; roomNumber: string } }[];
   invoice: { id: string } | null;
+  payments: { amount: string; type: string }[];
+  roomCharges: { amount: string }[];
 }
 
 interface AvailableRoom {
@@ -731,6 +733,32 @@ function nightsBetween(checkIn: string, checkOut: string): number | null {
 }
 
 /**
+ * Nights elapsed so far for a stay still in progress — check-in date to the
+ * hotel's current business day, floored at 1 (mirrors CheckoutService's
+ * actualCheckOut floor). Deliberately not capped at the planned checkOutDate:
+ * an overstaying guest keeps accruing here the same way checkout would bill them.
+ */
+function nightsElapsed(checkInDate: string, timezone: string): number {
+  const raw = nightsBetween(checkInDate.slice(0, 10), todayInTimeZone(timezone));
+  return raw && raw > 0 ? raw : 1;
+}
+
+/**
+ * How far a CHECKED_IN booking is below the house's 50%-collected minimum —
+ * same math as the Stay preview modal's estimated total (running room rent,
+ * not the whole planned stay), run against the list payload so it can flag
+ * rows without a per-booking fetch.
+ */
+function collectionShortfall(b: Booking, timezone: string): number {
+  const nights = nightsElapsed(b.checkInDate, timezone);
+  const roomRent = b.bookingRooms.reduce((sum, br) => sum + Number(br.rateApplied) * nights, 0);
+  const chargesSoFar = b.roomCharges.reduce((sum, c) => sum + Number(c.amount), 0);
+  const paidSoFar = b.payments.reduce((sum, p) => sum + (p.type === 'REFUND' ? -Number(p.amount) : Number(p.amount)), 0);
+  const estimatedTotal = roomRent + chargesSoFar;
+  return estimatedTotal > 0 ? Math.max(0, estimatedTotal * 0.5 - paidSoFar) : 0;
+}
+
+/**
  * A lighter, in-app alternative to the downloaded PDF — every line that
  * makes up the folio (room nights, logged charges, ad-hoc charges/discounts
  * typed in at checkout, the late fee, and payments received), each dated,
@@ -892,10 +920,18 @@ interface StayPreviewData {
 /**
  * The CHECKED_IN counterpart to InvoicePreviewModal — there's no invoice yet
  * (that's only created at checkout), so this reads the booking directly:
- * what's been paid so far (the check-in deposit and anything since) and what
- * charges have been logged mid-stay. Deliberately no grand total — nights,
- * tax, and any late fee aren't settled until actual checkout, and showing a
- * number that looks like a final bill before then would be misleading.
+ * running room rent for nights elapsed so far (not the whole planned stay —
+ * a guest checked in for 2 of 5 nights owes for 2), what's been paid so far
+ * (the check-in deposit and anything since), and what charges have been
+ * logged mid-stay.
+ * Tax and any late check-out fee are left out of the estimated total since
+ * they aren't settled until actual checkout.
+ *
+ * Also enforces the house policy that at least 50% of the estimated total
+ * should be collected at any point mid-stay — flags a shortfall and offers a
+ * top-up form (a plain CHARGE payment against the booking, same as a
+ * check-in deposit) so front desk can close the gap without waiting for
+ * checkout.
  */
 function StayPreviewModal({
   bookingId,
@@ -911,20 +947,63 @@ function StayPreviewModal({
   const [data, setData] = useState<StayPreviewData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [topUpMethod, setTopUpMethod] = useState('CASH');
+  const [topUpAmount, setTopUpAmount] = useState('');
+  const [topUpAmountTouched, setTopUpAmountTouched] = useState(false);
+  const [topUpSubmitting, setTopUpSubmitting] = useState(false);
+  const [topUpError, setTopUpError] = useState<string | null>(null);
 
-  useEffect(() => {
+  function loadData() {
     setLoading(true);
     setError(null);
-    apiFetch<StayPreviewData>(`/bookings/${bookingId}?hotelId=${hotelId}`)
+    return apiFetch<StayPreviewData>(`/bookings/${bookingId}?hotelId=${hotelId}`)
       .then(setData)
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load stay'))
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookingId, hotelId]);
 
   const paidSoFar = data
     ? data.payments.reduce((sum, p) => sum + (p.type === 'REFUND' ? -Number(p.amount) : Number(p.amount)), 0)
     : 0;
   const chargesSoFar = data ? data.roomCharges.reduce((sum, c) => sum + Number(c.amount), 0) : 0;
+  const nightsSoFar = data ? nightsElapsed(data.checkInDate, timezone) : 0;
+  const roomRent = data ? data.bookingRooms.reduce((sum, br) => sum + Number(br.rateApplied) * nightsSoFar, 0) : 0;
+  const estimatedTotal = roomRent + chargesSoFar;
+  // Policy: at least half of what's owed so far should be in hand at any
+  // point mid-stay, so a shortfall can be caught and collected before it
+  // snowballs into a large balance due only at checkout.
+  const minRequired = estimatedTotal * 0.5;
+  const shortfall = Math.max(0, minRequired - paidSoFar);
+  const belowMinimum = estimatedTotal > 0 && shortfall > 0;
+
+  useEffect(() => {
+    if (!topUpAmountTouched) setTopUpAmount(shortfall > 0 ? String(Math.round(shortfall * 100) / 100) : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shortfall]);
+
+  async function handleTopUp(e: React.FormEvent) {
+    e.preventDefault();
+    setTopUpError(null);
+    setTopUpSubmitting(true);
+    try {
+      await apiFetch(`/payments?hotelId=${hotelId}`, {
+        method: 'POST',
+        body: JSON.stringify({ bookingId, amount: Number(topUpAmount || 0), method: topUpMethod, reference: 'Mid-stay payment' }),
+      });
+      setTopUpAmount('');
+      setTopUpAmountTouched(false);
+      await loadData();
+    } catch (err) {
+      setTopUpError(err instanceof ApiError ? err.message : 'Failed to record payment');
+    } finally {
+      setTopUpSubmitting(false);
+    }
+  }
 
   return createPortal(
     <>
@@ -944,6 +1023,13 @@ function StayPreviewModal({
             <ErrorBanner>{error}</ErrorBanner>
           ) : data ? (
             <div className="space-y-4 text-sm">
+              {belowMinimum && (
+                <ErrorBanner>
+                  Only {money(paidSoFar)} of {money(estimatedTotal)} collected so far — below the 50% minimum. Collect at
+                  least {money(shortfall)} more.
+                </ErrorBanner>
+              )}
+
               <div>
                 <p className="font-medium text-slate-900">{data.guest.fullName}</p>
                 <p className="text-xs text-slate-500">
@@ -1005,17 +1091,52 @@ function StayPreviewModal({
 
               <div className="space-y-1 border-t border-slate-100 pt-3">
                 <div className="flex items-center justify-between text-slate-600">
+                  <span>Room rent so far ({nightsSoFar} night{nightsSoFar === 1 ? '' : 's'})</span>
+                  <span>{money(roomRent)}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-600">
                   <span>Charges logged so far</span>
                   <span>{money(chargesSoFar)}</span>
                 </div>
                 <div className="flex items-center justify-between font-medium text-slate-900">
+                  <span>Estimated total</span>
+                  <span>{money(estimatedTotal)}</span>
+                </div>
+                <div className="flex items-center justify-between text-slate-600">
                   <span>Paid so far</span>
                   <span>{money(paidSoFar)}</span>
                 </div>
                 <p className="pt-1 text-xs text-slate-400">
-                  Room rate, nights, tax, and any late fee aren&apos;t final until check-out.
+                  Tax and any late check-out fee aren&apos;t final until check-out.
                 </p>
               </div>
+
+              <form onSubmit={handleTopUp} className="space-y-2 border-t border-slate-100 pt-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Collect payment</p>
+                {topUpError && <ErrorBanner>{topUpError}</ErrorBanner>}
+                <div className="grid grid-cols-2 gap-2">
+                  <Select value={topUpMethod} onChange={(e) => setTopUpMethod(e.target.value)}>
+                    <option value="CASH">Cash</option>
+                    <option value="CARD">Card</option>
+                    <option value="UPI">UPI</option>
+                  </Select>
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    placeholder="Amount"
+                    required
+                    value={topUpAmount}
+                    onChange={(e) => {
+                      setTopUpAmountTouched(true);
+                      setTopUpAmount(e.target.value);
+                    }}
+                  />
+                </div>
+                <Button type="submit" disabled={topUpSubmitting} className="w-full">
+                  {topUpSubmitting ? 'Recording…' : 'Record top-up payment'}
+                </Button>
+              </form>
             </div>
           ) : null}
         </div>
@@ -1030,7 +1151,10 @@ export default function BookingsPage() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
-  const [status, setStatus] = useState('');
+  // Front desk mostly cares about who's in-house right now — default to
+  // Checked in rather than showing every draft/cancelled/completed booking;
+  // staff can still switch to any other status or "All statuses" from here.
+  const [status, setStatus] = useState('CHECKED_IN');
   const [search, setSearch] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [roomNumber, setRoomNumber] = useState('');
@@ -1346,6 +1470,7 @@ export default function BookingsPage() {
                 const canEditCheckedIn = b.status === 'CHECKED_IN';
                 const canChangeRoom = b.status === 'CHECKED_IN';
                 const invoiceId = b.invoice?.id;
+                const collectionDue = canEditCheckedIn ? collectionShortfall(b, timezone) : 0;
                 return (
                   <tr key={b.id} className="hover:bg-slate-50">
                     <td className="px-5 py-3 font-medium text-slate-900">
@@ -1380,7 +1505,21 @@ export default function BookingsPage() {
                         <span className="ml-1.5 text-xs text-slate-400">{stayTime(b.checkedOutAt, timezone)}</span>
                       )}
                     </td>
-                    <td className="px-5 py-3"><StatusBadge status={b.status} /></td>
+                    <td className="px-5 py-3">
+                      <span className="flex items-center gap-1.5">
+                        <StatusBadge status={b.status} />
+                        {collectionDue > 0 && (
+                          <button
+                            onClick={() => setPreviewStayId(b.id)}
+                            title={`Below 50% collected — ${money(collectionDue)} short`}
+                            className="flex items-center gap-1 rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-medium text-rose-700 hover:bg-rose-100"
+                          >
+                            <AlertTriangle className="h-3 w-3" />
+                            Collect {money(collectionDue)}
+                          </button>
+                        )}
+                      </span>
+                    </td>
                     <td className="px-5 py-3">
                       {(editable || canEditCheckedIn || canChangeRoom || invoiceId) && (
                         <div className="flex items-center gap-3">

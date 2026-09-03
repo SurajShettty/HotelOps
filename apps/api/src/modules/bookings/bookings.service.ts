@@ -169,6 +169,11 @@ export class BookingsService {
           bookingRooms: { include: { room: true } },
           guest: { include: GUEST_LOYALTY_INCLUDE },
           invoice: { select: { id: true } },
+          // Lean projections (amount/type only) so the list can flag
+          // under-collected mid-stay bookings (see the 50%-collected rule in
+          // the Bookings page) without a per-row round trip.
+          payments: { select: { amount: true, type: true } },
+          roomCharges: { select: { amount: true } },
         },
         // Last action taken on the booking, not when it was originally
         // created — a room change or extend on an old reservation surfaces

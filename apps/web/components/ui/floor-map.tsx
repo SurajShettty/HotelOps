@@ -95,12 +95,17 @@ function sortFloors(floors: string[]) {
   });
 }
 
-function tileState(room: FloorMapRoom, blockedRoomIds: Set<string>, reservedRoomIds: Set<string>): TileState {
-  if (room.status === 'OUT_OF_ORDER' || blockedRoomIds.has(room.id)) return 'MAINTENANCE';
+function tileState(room: FloorMapRoom, blockReasonByRoomId: Map<string, string>, reservedRoomIds: Set<string>): TileState {
+  if (room.status === 'OUT_OF_ORDER' || blockReasonByRoomId.has(room.id)) return 'MAINTENANCE';
   if (room.status === 'OCCUPIED') return 'OCCUPIED';
   if (room.status === 'DIRTY') return 'DIRTY';
   if (reservedRoomIds.has(room.id)) return 'RESERVED';
   return 'AVAILABLE';
+}
+
+/** Why a room is in the MAINTENANCE tile state — the active RoomBlock's reason, if any. */
+function maintenanceReason(room: FloorMapRoom, blockReasonByRoomId: Map<string, string>): string | null {
+  return blockReasonByRoomId.get(room.id) ?? null;
 }
 
 function countByState(states: TileState[]) {
@@ -156,7 +161,9 @@ function SummaryStrip({ counts, total }: { counts: Map<TileState, number>; total
 export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: string }) {
   const { timezone } = useCurrentHotel();
   const [reservedRoomIds, setReservedRoomIds] = useState<Set<string>>(new Set());
-  const [blockedRoomIds, setBlockedRoomIds] = useState<Set<string>>(new Set());
+  // roomId -> the active RoomBlock's reason, for rooms blocked without the
+  // Room itself being OUT_OF_ORDER (e.g. a future maintenance hold).
+  const [blockReasonByRoomId, setBlockReasonByRoomId] = useState<Map<string, string>>(new Map());
   const [occupantByRoomId, setOccupantByRoomId] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [hovered, setHovered] = useState<{ room: FloorMapRoom; anchor: { top: number; left: number } } | null>(null);
@@ -191,15 +198,15 @@ export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: s
           for (const br of b.bookingRooms) occupants.set(br.room.id, b.guest.fullName);
         }
 
-        const blocked = new Set<string>();
+        const blockReasons = new Map<string, string>();
         blocksPerRoom.forEach((blocks, i) => {
-          const active = blocks.some((bl) => bl.startDate.slice(0, 10) <= today && today < bl.endDate.slice(0, 10));
-          if (active) blocked.add(rooms[i].id);
+          const active = blocks.find((bl) => bl.startDate.slice(0, 10) <= today && today < bl.endDate.slice(0, 10));
+          if (active) blockReasons.set(rooms[i].id, active.reason);
         });
 
         setReservedRoomIds(reserved);
         setOccupantByRoomId(occupants);
-        setBlockedRoomIds(blocked);
+        setBlockReasonByRoomId(blockReasons);
       })
       .finally(() => !cancelled && setLoading(false));
 
@@ -224,7 +231,7 @@ export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: s
     return floors.map((floor) => ({ floor, rooms: byFloor.get(floor)! }));
   }, [rooms]);
 
-  const allStates = useMemo(() => rooms.map((r) => tileState(r, blockedRoomIds, reservedRoomIds)), [rooms, blockedRoomIds, reservedRoomIds]);
+  const allStates = useMemo(() => rooms.map((r) => tileState(r, blockReasonByRoomId, reservedRoomIds)), [rooms, blockReasonByRoomId, reservedRoomIds]);
   const overallCounts = useMemo(() => countByState(allStates), [allStates]);
 
   function handleEnter(e: React.MouseEvent<HTMLElement>, room: FloorMapRoom) {
@@ -247,7 +254,7 @@ export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: s
 
       <div className="space-y-5">
         {floorGroups.map(({ floor, rooms: floorRooms }) => {
-          const floorStates = floorRooms.map((r) => tileState(r, blockedRoomIds, reservedRoomIds));
+          const floorStates = floorRooms.map((r) => tileState(r, blockReasonByRoomId, reservedRoomIds));
           const floorCounts = countByState(floorStates);
           return (
             <Card key={floor} className="p-5">
@@ -266,9 +273,10 @@ export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: s
 
               <div className="flex flex-wrap gap-2.5">
                 {floorRooms.map((room) => {
-                  const state = tileState(room, blockedRoomIds, reservedRoomIds);
+                  const state = tileState(room, blockReasonByRoomId, reservedRoomIds);
                   const style = TILE_STYLES[state];
                   const occupant = occupantByRoomId.get(room.id);
+                  const reason = state === 'MAINTENANCE' ? maintenanceReason(room, blockReasonByRoomId) : null;
                   return (
                     <button
                       key={room.id}
@@ -283,6 +291,7 @@ export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: s
                       </span>
                       <span className={`text-[10.5px] font-semibold ${style.iconColor}`}>{style.label}</span>
                       {occupant && <span className="w-full truncate text-[10.5px] opacity-70">{occupant}</span>}
+                      {reason && <span className="w-full truncate text-[10.5px] opacity-70">{reason}</span>}
                     </button>
                   );
                 })}
@@ -302,8 +311,9 @@ export function FloorMap({ rooms, hotelId }: { rooms: FloorMapRoom[]; hotelId: s
             >
               <p className="text-sm font-semibold text-slate-900">Room {hovered.room.roomNumber}</p>
               <p className="flex items-center gap-1.5 text-xs text-slate-500">
-                <span className={`h-2 w-2 rounded-full ${TILE_STYLES[tileState(hovered.room, blockedRoomIds, reservedRoomIds)].dot}`} />
-                {TILE_STYLES[tileState(hovered.room, blockedRoomIds, reservedRoomIds)].label}
+                <span className={`h-2 w-2 rounded-full ${TILE_STYLES[tileState(hovered.room, blockReasonByRoomId, reservedRoomIds)].dot}`} />
+                {TILE_STYLES[tileState(hovered.room, blockReasonByRoomId, reservedRoomIds)].label}
+                {maintenanceReason(hovered.room, blockReasonByRoomId) && ` — ${maintenanceReason(hovered.room, blockReasonByRoomId)}`}
               </p>
               {occupantByRoomId.has(hovered.room.id) && (
                 <p className="text-xs text-slate-500">Guest: {occupantByRoomId.get(hovered.room.id)}</p>
