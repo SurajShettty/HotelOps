@@ -31,6 +31,13 @@ function money(n: number) {
   return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
 }
 
+// Axis ticks need to stay short (e.g. "40k") — the fixed-width YAxis was
+// clipping full 5-digit revenue figures like "40000" against its left edge.
+// The tooltip still shows the exact, comma-formatted amount via money() above.
+function compactMoney(n: number) {
+  return Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
+}
+
 function ChartTooltip({ active, payload, label, formatter }: { active?: boolean; payload?: { value: number }[]; label?: string; formatter: (v: number) => string }) {
   if (!active || !payload || payload.length === 0) return null;
   return (
@@ -114,7 +121,7 @@ export function DashboardTrends({ hotelId }: { hotelId: string }) {
                     tickLine={false}
                     interval={rangeDays === 30 ? 4 : 0}
                   />
-                  <YAxis width={34} tick={{ fontSize: 10, fill: '#898781' }} axisLine={false} tickLine={false} />
+                  <YAxis width={38} tick={{ fontSize: 10, fill: '#898781' }} axisLine={false} tickLine={false} tickFormatter={compactMoney} />
                   <Tooltip content={<ChartTooltip formatter={money} />} />
                   <Area type="monotone" dataKey="revenue" stroke="#2b4b96" strokeWidth={2} fill="url(#dashboardRevenueFill)" activeDot={{ r: 4 }} />
                 </AreaChart>

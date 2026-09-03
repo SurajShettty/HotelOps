@@ -117,11 +117,9 @@ export class CheckinService {
         });
       }
 
-      if (dto.depositAmount) {
-        await tx.payment.create({
-          data: { bookingId: dto.bookingId, amount: dto.depositAmount, method: 'CASH', type: 'CHARGE', reference: 'Check-in deposit' },
-        });
-      }
+      await tx.payment.create({
+        data: { bookingId: dto.bookingId, amount: dto.depositAmount, method: 'CASH', type: 'CHARGE', reference: 'Check-in deposit' },
+      });
 
       // Early check-in fee: is the moment this check-in is being performed
       // (not the booked date, the actual wall-clock time) before the hotel's

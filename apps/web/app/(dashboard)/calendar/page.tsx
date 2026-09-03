@@ -56,6 +56,7 @@ interface RoomType {
 interface Room {
   id: string;
   roomNumber: string;
+  floor: string | null;
   roomType: RoomType;
 }
 
@@ -313,6 +314,10 @@ function ReserveOrCheckinForm({
       setError("Enter the guest's ID document type, number, and upload a photo/scan to check in");
       return;
     }
+    if (mode === 'checkin' && !(Number(deposit) > 0)) {
+      setError('Enter a deposit amount to check in');
+      return;
+    }
     setSubmitting(true);
     try {
       const guestId =
@@ -347,7 +352,7 @@ function ReserveOrCheckinForm({
           body: JSON.stringify({
             bookingId: booking.id,
             roomAssignments: booking.bookingRooms.map((br) => ({ bookingRoomId: br.id, roomId: br.roomId })),
-            ...(deposit ? { depositAmount: Number(deposit) } : {}),
+            depositAmount: Number(deposit),
             idDocumentType: idDocType,
             idDocumentNumber: idDocNumber,
             idDocumentUrl: idDocUrl,
@@ -389,8 +394,8 @@ function ReserveOrCheckinForm({
           </div>
           {mode === 'checkin' && (
             <div>
-              <Label htmlFor="cell-deposit">Deposit</Label>
-              <Input id="cell-deposit" type="number" min={0} placeholder="0" value={deposit} onChange={(e) => setDeposit(e.target.value)} className="text-sm" />
+              <Label htmlFor="cell-deposit">Deposit *</Label>
+              <Input id="cell-deposit" type="number" min={0.01} step="any" required placeholder="0" value={deposit} onChange={(e) => setDeposit(e.target.value)} className="text-sm" />
             </div>
           )}
         </div>
@@ -482,8 +487,14 @@ function ReserveOrCheckinForm({
         <div className="flex items-center gap-2">
           <Button
             type="submit"
-            disabled={submitting || (mode === 'checkin' && (!idDocType.trim() || !idDocNumber.trim() || !idDocUrl))}
-            title={mode === 'checkin' && (!idDocType.trim() || !idDocNumber.trim() || !idDocUrl) ? "Upload the guest's ID document, type, and number to check in" : undefined}
+            disabled={submitting || (mode === 'checkin' && (!idDocType.trim() || !idDocNumber.trim() || !idDocUrl || !(Number(deposit) > 0)))}
+            title={
+              mode === 'checkin' && (!idDocType.trim() || !idDocNumber.trim() || !idDocUrl)
+                ? "Upload the guest's ID document, type, and number to check in"
+                : mode === 'checkin' && !(Number(deposit) > 0)
+                  ? 'Enter a deposit amount to check in'
+                  : undefined
+            }
             className="px-3 py-1.5 text-xs"
           >
             {submitting ? (mode === 'checkin' ? 'Checking in…' : 'Reserving…') : mode === 'checkin' ? 'Check In' : 'Reserve'}
@@ -686,10 +697,17 @@ export default function CalendarPage() {
     anchor: Anchor;
   } | null>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [floorFilter, setFloorFilter] = useState('');
 
   const days = useMemo(() => Array.from({ length: DAYS_SHOWN }, (_, i) => addDays(startDate, i)), [startDate]);
   const { colors: roomTypeColors, types: roomTypes } = useRoomTypeColors(rooms);
   const todayIso = toDateOnly(new Date());
+  // Free text, not a managed list — same pattern as the Rooms page's floor filter.
+  const floors = useMemo(
+    () => Array.from(new Set(rooms.map((r) => r.floor).filter((f): f is string => !!f))).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    [rooms],
+  );
+  const visibleRooms = floorFilter ? rooms.filter((r) => r.floor === floorFilter) : rooms;
 
   // Small delay before showing the preview so it doesn't flash while the mouse
   // is just passing through a row of cells on its way somewhere else.
@@ -950,6 +968,17 @@ export default function CalendarPage() {
         }
       />
 
+      {floors.length > 0 && (
+        <div className="mb-3 flex items-center gap-2">
+          <Select value={floorFilter} onChange={(e) => setFloorFilter(e.target.value)} className="w-40 text-sm">
+            <option value="">All floors</option>
+            {floors.map((f) => (
+              <option key={f} value={f}>Floor {f}</option>
+            ))}
+          </Select>
+        </div>
+      )}
+
       <div className="mb-2 flex flex-wrap gap-4 text-xs text-slate-500">
         <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded bg-sky-100 ring-1 ring-sky-300" /> Confirmed</span>
         <span className="flex items-center gap-1.5"><span className="h-3 w-3 rounded bg-emerald-100 ring-1 ring-emerald-300" /> Checked in</span>
@@ -971,6 +1000,8 @@ export default function CalendarPage() {
         <p className="text-sm text-slate-400">Loading…</p>
       ) : rooms.length === 0 ? (
         <p className="text-sm text-slate-400">No rooms yet — add some from the Rooms page.</p>
+      ) : visibleRooms.length === 0 ? (
+        <p className="text-sm text-slate-400">No rooms on this floor.</p>
       ) : (
         <Card className="overflow-x-auto p-0">
           <table className="w-full border-collapse text-sm">
@@ -985,7 +1016,7 @@ export default function CalendarPage() {
               </tr>
             </thead>
             <tbody>
-              {rooms.map((room) => (
+              {visibleRooms.map((room) => (
                 <tr key={room.id}>
                   <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-white px-4 py-2.5 font-medium tabular-nums text-slate-900">
                     <span className="flex items-center gap-2">

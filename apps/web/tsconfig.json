@@ -17,5 +17,10 @@
     "paths": { "@/*": ["./*"] }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  // app/sw.ts runs in a ServiceWorkerGlobalScope, not the DOM this project's
+  // "dom" lib assumes — its own `/// <reference lib="webworker" />` would
+  // collide with "dom" if type-checked in the same program (both declare an
+  // incompatible global `self`), so it's excluded here and checked on its
+  // own via tsconfig.worker.json instead.
+  "exclude": ["node_modules", "app/sw.ts"]
 }

@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsBoolean, IsNotEmpty, IsNumber, IsOptional, IsString, IsUUID, ValidateNested } from 'class-validator';
+import { ArrayMinSize, IsArray, IsBoolean, IsNotEmpty, IsNumber, IsOptional, IsPositive, IsString, IsUUID, ValidateNested } from 'class-validator';
 
 class RoomAssignmentInput {
   @IsUUID()
@@ -19,9 +19,10 @@ export class CheckinDto {
   @Type(() => RoomAssignmentInput)
   roomAssignments!: RoomAssignmentInput[];
 
-  @IsOptional()
+  // Required — a booking can't be checked in without collecting a deposit.
   @IsNumber()
-  depositAmount?: number;
+  @IsPositive()
+  depositAmount!: number;
 
   // Front desk can waive the hotel's configured early check-in fee for this
   // arrival (e.g. loyalty guest, room was ready anyway). No effect if the

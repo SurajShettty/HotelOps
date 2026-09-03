@@ -129,6 +129,7 @@ export class BookingsService {
       status?: string;
       search?: string;
       roomNumber?: string;
+      floor?: string;
       from?: string;
       to?: string;
       arrivingOn?: string;
@@ -144,8 +145,20 @@ export class BookingsService {
       hotelId,
       ...(opts.status ? { status: opts.status as never } : {}),
       ...(opts.search ? { guest: { fullName: { contains: opts.search, mode: 'insensitive' } } } : {}),
-      ...(opts.roomNumber
-        ? { bookingRooms: { some: { room: { roomNumber: { contains: opts.roomNumber, mode: 'insensitive' } } } } }
+      // Both live under the same bookingRooms.some.room key, so they're merged
+      // into one clause rather than two separate spreads — two spreads would
+      // have the second silently clobber the first when both are active.
+      ...(opts.roomNumber || opts.floor
+        ? {
+            bookingRooms: {
+              some: {
+                room: {
+                  ...(opts.roomNumber ? { roomNumber: { contains: opts.roomNumber, mode: 'insensitive' } } : {}),
+                  ...(opts.floor ? { floor: opts.floor } : {}),
+                },
+              },
+            },
+          }
         : {}),
       ...(opts.from ? { checkInDate: { gte: new Date(opts.from) } } : {}),
       ...(opts.to ? { checkOutDate: { lte: new Date(opts.to) } } : {}),

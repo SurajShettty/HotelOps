@@ -55,7 +55,7 @@ export default function CheckinPage() {
   // (which would otherwise drop them from `arrivals` the instant their status
   // moves off CONFIRMED) until the receptionist dismisses the summary below,
   // so check-in doesn't feel like the row vanished with no confirmation.
-  const [justCheckedIn, setJustCheckedIn] = useState<Record<string, { roomNumbers: string[]; depositAmount: number | null; idVerified: boolean }>>({});
+  const [justCheckedIn, setJustCheckedIn] = useState<Record<string, { roomNumbers: string[]; depositAmount: number; idVerified: boolean }>>({});
   const [hotelPolicy, setHotelPolicy] = useState<{ timezone: string; checkInTime: string; earlyCheckInFee: string } | null>(null);
   const [waiveEarlyFee, setWaiveEarlyFee] = useState<Record<string, boolean>>({});
   // Alternate rooms offered when a guest's reserved room isn't ready yet —
@@ -215,16 +215,21 @@ export default function CheckinPage() {
 
   async function handleCheckin(booking: Booking) {
     setError(null);
+    const depositRaw = deposits[booking.id];
+    const depositAmount = Number(depositRaw);
+    if (!depositRaw || !(depositAmount > 0)) {
+      setError('Enter a deposit amount to check in');
+      return;
+    }
     setCheckingInId(booking.id);
     try {
-      const depositRaw = deposits[booking.id];
       const altRoomId = selectedAltRoom[booking.id];
       await apiFetch(`/checkin?hotelId=${hotelId}`, {
         method: 'POST',
         body: JSON.stringify({
           bookingId: booking.id,
           roomAssignments: booking.bookingRooms.map((br) => ({ bookingRoomId: br.id, roomId: altRoomId ?? br.room.id })),
-          ...(depositRaw ? { depositAmount: Number(depositRaw) } : {}),
+          depositAmount,
           waiveEarlyCheckInFee: !!waiveEarlyFee[booking.id],
           idDocumentType: idDocType[booking.id],
           idDocumentNumber: idDocNumber[booking.id],
@@ -237,7 +242,7 @@ export default function CheckinPage() {
         ...prev,
         [booking.id]: {
           roomNumbers: altRoomNumber ? [altRoomNumber] : booking.bookingRooms.map((br) => br.room.roomNumber),
-          depositAmount: depositRaw ? Number(depositRaw) : null,
+          depositAmount,
           idVerified: !!idVerified[booking.id],
         },
       }));
@@ -310,7 +315,7 @@ export default function CheckinPage() {
                         <span className="tabular-nums text-slate-500">— Room {justDone.roomNumbers.join(', ')}</span>
                       </p>
                       <p className="mt-0.5 text-xs text-slate-500">
-                        {justDone.depositAmount ? `Deposit collected: ${justDone.depositAmount}` : 'No deposit collected'}
+                        Deposit collected: {justDone.depositAmount}
                         {justDone.idVerified ? ' · ID verified' : ''}
                       </p>
                     </div>
@@ -329,7 +334,8 @@ export default function CheckinPage() {
             const altOptions = altRooms[b.id];
             const altPicked = selectedAltRoom[b.id];
             const idComplete = !!(idDocType[b.id]?.trim() && idDocNumber[b.id]?.trim() && idDocUrl[b.id]);
-            const canCheckIn = idComplete && (!notReady || (canOfferAlt && !!altPicked));
+            const depositComplete = Number(deposits[b.id]) > 0;
+            const canCheckIn = idComplete && depositComplete && (!notReady || (canOfferAlt && !!altPicked));
             const blockNote = !notReady ? roomBlockNote[b.id] : null;
             return (
               <Card key={b.id} className="flex flex-wrap items-center justify-between gap-4 p-5">
@@ -365,12 +371,15 @@ export default function CheckinPage() {
                   )}
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-end gap-2">
                   <div className="w-32">
-                    <Label htmlFor={`deposit-${b.id}`}>Deposit</Label>
+                    <Label htmlFor={`deposit-${b.id}`}>Deposit *</Label>
                     <Input
                       id={`deposit-${b.id}`}
                       type="number"
+                      min={0.01}
+                      step="any"
+                      required
                       placeholder="0"
                       value={deposits[b.id] ?? ''}
                       onChange={(e) => setDeposits((prev) => ({ ...prev, [b.id]: e.target.value }))}
@@ -382,9 +391,11 @@ export default function CheckinPage() {
                     title={
                       !idComplete
                         ? "Upload the guest's ID document, type, and number to check in"
-                        : !canCheckIn
-                          ? (canOfferAlt ? 'Pick a room to check into' : 'Room is not marked available')
-                          : undefined
+                        : !depositComplete
+                          ? 'Enter a deposit amount to check in'
+                          : !canCheckIn
+                            ? (canOfferAlt ? 'Pick a room to check into' : 'Room is not marked available')
+                            : undefined
                     }
                   >
                     {checkingInId === b.id ? 'Checking in…' : altPicked ? `Check In → Room ${altOptions?.find((r) => r.id === altPicked)?.roomNumber}` : 'Check In'}

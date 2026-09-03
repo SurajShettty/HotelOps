@@ -161,10 +161,17 @@ export class CheckoutService {
         alreadyPaid,
       } = await this.computeFolio(tx, dto.bookingId, dto.additionalCharges, dto.discounts, dto.taxRatePercent, dto.waiveLateCheckOutFee);
 
-      const paidSoFar = alreadyPaid + dto.paymentAmount;
-      if (paidSoFar < grandTotal) {
+      // Rounded to cents before comparing — grandTotal already went through
+      // the same rounding in computeFolio, and comparing it against a raw,
+      // unrounded paidSoFar can fail on a sub-cent binary floating-point
+      // epsilon even when the guest paid the exact amount shown on screen
+      // (e.g. 4456 + 5861.44 not landing bit-for-bit on grandTotal), which
+      // used to reject a fully-paid checkout with a spurious "Balance due: 0.00".
+      const paidSoFar = Math.round((alreadyPaid + dto.paymentAmount) * 100) / 100;
+      const shortfall = Math.round((grandTotal - paidSoFar) * 100) / 100;
+      if (shortfall > 0) {
         throw new HttpException(
-          { code: 'PAYMENT_INCOMPLETE', message: `Balance due: ${(grandTotal - paidSoFar).toFixed(2)}` },
+          { code: 'PAYMENT_INCOMPLETE', message: `Balance due: ${shortfall.toFixed(2)}` },
           HttpStatus.PAYMENT_REQUIRED,
         );
       }

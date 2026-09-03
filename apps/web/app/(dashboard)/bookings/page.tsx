@@ -425,49 +425,65 @@ function CheckedInEditForm({
     }
   }
 
-  return (
-    <Card className="mb-6 p-5">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {error && <ErrorBanner>{error}</ErrorBanner>}
-        <p className="flex items-center gap-1.5 text-sm text-slate-500">
-          Editing <span className="font-medium text-slate-900">{booking.guest.fullName}</span>&apos;s stay
-          <GuestBadges guest={booking.guest} />
-        </p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div>
-            <Label htmlFor="checkedin-checkout">Check-out date</Label>
-            <Input
-              id="checkedin-checkout"
-              required
-              type="date"
-              value={checkOut}
-              onChange={(e) => setCheckOut(e.target.value)}
-            />
+  // A centered modal (same shell as StayPreviewModal/InvoicePreviewModal
+  // below) rather than a block inserted at the top of the page — the old
+  // inline placement opened this far from whichever row's Edit button was
+  // clicked, especially a few pages/scrolls down a long list.
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40 bg-slate-900/40" onClick={onCancel} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-popover">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+              Editing {booking.guest.fullName}&apos;s stay
+              <GuestBadges guest={booking.guest} />
+            </h3>
+            <button onClick={onCancel} className="shrink-0 text-slate-400 hover:text-slate-700">
+              <X className="h-4 w-4" />
+            </button>
           </div>
-          {booking.bookingRooms.map((br) => (
-            <div key={br.id}>
-              <Label htmlFor={`occupants-${br.id}`}>Occupants — Room {br.room.roomNumber}</Label>
-              <Input
-                id={`occupants-${br.id}`}
-                required
-                type="number"
-                min={1}
-                value={occupants[br.id] ?? ''}
-                onChange={(e) => setOccupants((prev) => ({ ...prev, [br.id]: e.target.value }))}
-              />
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error && <ErrorBanner>{error}</ErrorBanner>}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="checkedin-checkout">Check-out date</Label>
+                <Input
+                  id="checkedin-checkout"
+                  required
+                  type="date"
+                  value={checkOut}
+                  onChange={(e) => setCheckOut(e.target.value)}
+                />
+              </div>
+              {booking.bookingRooms.map((br) => (
+                <div key={br.id}>
+                  <Label htmlFor={`occupants-${br.id}`}>Occupants — Room {br.room.roomNumber}</Label>
+                  <Input
+                    id={`occupants-${br.id}`}
+                    required
+                    type="number"
+                    min={1}
+                    value={occupants[br.id] ?? ''}
+                    onChange={(e) => setOccupants((prev) => ({ ...prev, [br.id]: e.target.value }))}
+                  />
+                </div>
+              ))}
             </div>
-          ))}
+            <div className="flex gap-2">
+              <Button type="submit" disabled={submitting}>
+                {submitting ? 'Saving…' : 'Save Changes'}
+              </Button>
+              <button type="button" onClick={onCancel} className="text-sm text-slate-400 hover:text-slate-700">
+                Cancel
+              </button>
+            </div>
+          </form>
         </div>
-        <div className="flex gap-2">
-          <Button type="submit" disabled={submitting}>
-            {submitting ? 'Saving…' : 'Save Changes'}
-          </Button>
-          <button type="button" onClick={onCancel} className="text-sm text-slate-400 hover:text-slate-700">
-            Cancel
-          </button>
-        </div>
-      </form>
-    </Card>
+      </div>
+    </>,
+    document.body,
   );
 }
 
@@ -584,112 +600,127 @@ function ChangeRoomForm({
     }
   }
 
-  return (
-    <Card className="mb-6 p-5">
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {error && <ErrorBanner>{error}</ErrorBanner>}
-        <p className="flex items-center gap-1.5 text-sm text-slate-500">
-          Changing room for <span className="font-medium text-slate-900">{booking.guest.fullName}</span>&apos;s stay
-          <GuestBadges guest={booking.guest} />
-        </p>
-        {booking.bookingRooms.length > 1 && (
-          <div>
-            <Label htmlFor="bookingRoom">Which room</Label>
-            <Select
-              id="bookingRoom"
-              value={bookingRoomId}
-              onChange={(e) => {
-                setBookingRoomId(e.target.value);
-                setSelectedRoomId('');
-                setRateTouched(false);
-              }}
-            >
-              {booking.bookingRooms.map((br) => (
-                <option key={br.id} value={br.id}>
-                  Room {br.room.roomNumber} — {br.rateApplied}/night
-                </option>
-              ))}
-            </Select>
+  // A centered modal (same shell as StayPreviewModal/CheckedInEditForm)
+  // rather than a block inserted at the top of the page — see the same fix
+  // on CheckedInEditForm above for why.
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40 bg-slate-900/40" onClick={onCancel} />
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-lg border border-slate-200 bg-white p-5 shadow-popover">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <h3 className="flex items-center gap-1.5 text-sm font-semibold text-slate-900">
+              Changing room for {booking.guest.fullName}&apos;s stay
+              <GuestBadges guest={booking.guest} />
+            </h3>
+            <button onClick={onCancel} className="shrink-0 text-slate-400 hover:text-slate-700">
+              <X className="h-4 w-4" />
+            </button>
           </div>
-        )}
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div>
-            <Label htmlFor="newRoom">New room</Label>
-            <Select
-              id="newRoom"
-              required
-              value={selectedRoomId}
-              onChange={(e) => {
-                setSelectedRoomId(e.target.value);
-                const room = availableRooms.find((r) => r.id === e.target.value);
-                if (room && !rateTouched) setRate(String(Number(room.roomType.baseRate)));
-              }}
-            >
-              <option value="" disabled>
-                {checkingAvailability ? 'Checking availability…' : 'Select an available room'}
-              </option>
-              {availableRooms.map((r) => (
-                <option key={r.id} value={r.id}>
-                  Room {r.roomNumber} — {r.roomType.baseRate}/night
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div>
-            <Label htmlFor="newRate">New rate/night</Label>
-            <Input
-              id="newRate"
-              required
-              type="number"
-              min={0}
-              step="any"
-              value={rate}
-              onChange={(e) => {
-                setRateTouched(true);
-                setRate(e.target.value);
-              }}
-            />
-            {rateQuoteLoading ? (
-              <p className="mt-1 text-xs text-slate-400">Checking pricing rules…</p>
-            ) : rateQuote && (rateQuote.averageRate !== rateQuote.baseRate || rateQuote.blended) ? (
-              <p className="mt-1 text-xs text-slate-400">
-                Pricing rules suggest {rateQuote.averageRate}
-                {rateQuote.blended ? ' (varies by night — averaged)' : ''}
+
+          <form onSubmit={handleSubmit} className="space-y-4">
+            {error && <ErrorBanner>{error}</ErrorBanner>}
+            {booking.bookingRooms.length > 1 && (
+              <div>
+                <Label htmlFor="bookingRoom">Which room</Label>
+                <Select
+                  id="bookingRoom"
+                  value={bookingRoomId}
+                  onChange={(e) => {
+                    setBookingRoomId(e.target.value);
+                    setSelectedRoomId('');
+                    setRateTouched(false);
+                  }}
+                >
+                  {booking.bookingRooms.map((br) => (
+                    <option key={br.id} value={br.id}>
+                      Room {br.room.roomNumber} — {br.rateApplied}/night
+                    </option>
+                  ))}
+                </Select>
+              </div>
+            )}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <Label htmlFor="newRoom">New room</Label>
+                <Select
+                  id="newRoom"
+                  required
+                  value={selectedRoomId}
+                  onChange={(e) => {
+                    setSelectedRoomId(e.target.value);
+                    const room = availableRooms.find((r) => r.id === e.target.value);
+                    if (room && !rateTouched) setRate(String(Number(room.roomType.baseRate)));
+                  }}
+                >
+                  <option value="" disabled>
+                    {checkingAvailability ? 'Checking availability…' : 'Select an available room'}
+                  </option>
+                  {availableRooms.map((r) => (
+                    <option key={r.id} value={r.id}>
+                      Room {r.roomNumber} — {r.roomType.baseRate}/night
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div>
+                <Label htmlFor="newRate">New rate/night</Label>
+                <Input
+                  id="newRate"
+                  required
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={rate}
+                  onChange={(e) => {
+                    setRateTouched(true);
+                    setRate(e.target.value);
+                  }}
+                />
+                {rateQuoteLoading ? (
+                  <p className="mt-1 text-xs text-slate-400">Checking pricing rules…</p>
+                ) : rateQuote && (rateQuote.averageRate !== rateQuote.baseRate || rateQuote.blended) ? (
+                  <p className="mt-1 text-xs text-slate-400">
+                    Pricing rules suggest {rateQuote.averageRate}
+                    {rateQuote.blended ? ' (varies by night — averaged)' : ''}
+                  </p>
+                ) : null}
+              </div>
+            </div>
+            {tier && (
+              <p className="text-xs text-slate-500">
+                Current rate {currentRate}/night →{' '}
+                <span
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                    tier === 'upgrade'
+                      ? 'bg-gold-50 text-gold-700'
+                      : tier === 'downgrade'
+                        ? 'bg-slate-200 text-slate-600'
+                        : 'bg-sky-50 text-sky-700'
+                  }`}
+                >
+                  {tier === 'upgrade' ? 'Upgrade' : tier === 'downgrade' ? 'Downgrade' : 'Lateral move'}
+                </span>{' '}
+                — billed from today ({today}) onward; nights already stayed keep the old rate.
               </p>
-            ) : null}
-          </div>
+            )}
+            <div>
+              <Label htmlFor="reason">Reason (optional)</Label>
+              <Input id="reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. guest request, maintenance" />
+            </div>
+            <div className="flex gap-2">
+              <Button type="submit" disabled={submitting || availableRooms.length === 0}>
+                {submitting ? 'Saving…' : 'Change Room'}
+              </Button>
+              <button type="button" onClick={onCancel} className="text-sm text-slate-400 hover:text-slate-700">
+                Cancel
+              </button>
+            </div>
+          </form>
         </div>
-        {tier && (
-          <p className="text-xs text-slate-500">
-            Current rate {currentRate}/night →{' '}
-            <span
-              className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-                tier === 'upgrade'
-                  ? 'bg-gold-50 text-gold-700'
-                  : tier === 'downgrade'
-                    ? 'bg-slate-200 text-slate-600'
-                    : 'bg-sky-50 text-sky-700'
-              }`}
-            >
-              {tier === 'upgrade' ? 'Upgrade' : tier === 'downgrade' ? 'Downgrade' : 'Lateral move'}
-            </span>{' '}
-            — billed from today ({today}) onward; nights already stayed keep the old rate.
-          </p>
-        )}
-        <div>
-          <Label htmlFor="reason">Reason (optional)</Label>
-          <Input id="reason" value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. guest request, maintenance" />
-        </div>
-        <div className="flex gap-2">
-          <Button type="submit" disabled={submitting || availableRooms.length === 0}>
-            {submitting ? 'Saving…' : 'Change Room'}
-          </Button>
-          <button type="button" onClick={onCancel} className="text-sm text-slate-400 hover:text-slate-700">
-            Cancel
-          </button>
-        </div>
-      </form>
-    </Card>
+      </div>
+    </>,
+    document.body,
   );
 }
 
@@ -980,6 +1011,7 @@ function StayPreviewModal({
   const minRequired = estimatedTotal * 0.5;
   const shortfall = Math.max(0, minRequired - paidSoFar);
   const belowMinimum = estimatedTotal > 0 && shortfall > 0;
+  const balanceDue = Math.max(0, estimatedTotal - paidSoFar);
 
   useEffect(() => {
     if (!topUpAmountTouched) setTopUpAmount(shortfall > 0 ? String(Math.round(shortfall * 100) / 100) : '');
@@ -1106,6 +1138,10 @@ function StayPreviewModal({
                   <span>Paid so far</span>
                   <span>{money(paidSoFar)}</span>
                 </div>
+                <div className="flex items-center justify-between border-t border-slate-100 pt-1.5 font-medium text-slate-900">
+                  <span>Balance to be paid</span>
+                  <span>{money(balanceDue)}</span>
+                </div>
                 <p className="pt-1 text-xs text-slate-400">
                   Tax and any late check-out fee aren&apos;t final until check-out.
                 </p>
@@ -1159,6 +1195,8 @@ export default function BookingsPage() {
   const [searchInput, setSearchInput] = useState('');
   const [roomNumber, setRoomNumber] = useState('');
   const [roomNumberInput, setRoomNumberInput] = useState('');
+  const [floorFilter, setFloorFilter] = useState('');
+  const [floors, setFloors] = useState<string[]>([]);
   const [dateFilter, setDateFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1205,6 +1243,17 @@ export default function BookingsPage() {
     return () => clearTimeout(timer);
   }, [roomNumberInput]);
 
+  // Floors are free text, not a managed list — same pattern as the Rooms/Calendar pages.
+  useEffect(() => {
+    if (!hotelId) return;
+    apiFetch<{ floor: string | null }[]>(`/rooms?hotelId=${hotelId}`)
+      .then((rooms) => {
+        const unique = Array.from(new Set(rooms.map((r) => r.floor).filter((f): f is string => !!f)));
+        setFloors(unique.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })));
+      })
+      .catch(() => setFloors([]));
+  }, [hotelId]);
+
   function reload() {
     if (!hotelId) return;
     setLoading(true);
@@ -1212,6 +1261,7 @@ export default function BookingsPage() {
     if (status) params.set('status', status);
     if (search) params.set('search', search);
     if (roomNumber) params.set('roomNumber', roomNumber);
+    if (floorFilter) params.set('floor', floorFilter);
     if (dateFilter) params.set('onDate', dateFilter);
     if (quickFilter === 'ARRIVING_TODAY') params.set('arrivingOn', today);
     if (quickFilter === 'DEPARTING_TODAY') params.set('departingOn', today);
@@ -1226,7 +1276,7 @@ export default function BookingsPage() {
   useEffect(() => {
     if (ready) reload();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, hotelId, status, search, roomNumber, dateFilter, quickFilter, page]);
+  }, [ready, hotelId, status, search, roomNumber, floorFilter, dateFilter, quickFilter, page]);
 
   async function handleCancel(id: string) {
     if (!confirm('Cancel this booking?')) return;
@@ -1298,19 +1348,36 @@ export default function BookingsPage() {
             className="pl-9"
           />
         </div>
-        <Select
-          value={status}
-          onChange={(e) => {
-            setStatus(e.target.value);
-            setQuickFilter(null);
-            setPage(1);
-          }}
-          className="w-44"
-        >
-          {STATUS_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>{o.label}</option>
-          ))}
-        </Select>
+        <div className="flex shrink-0 items-center gap-3">
+          <Select
+            value={status}
+            onChange={(e) => {
+              setStatus(e.target.value);
+              setQuickFilter(null);
+              setPage(1);
+            }}
+            className="w-56"
+          >
+            {STATUS_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </Select>
+          {floors.length > 0 && (
+            <Select
+              value={floorFilter}
+              onChange={(e) => {
+                setFloorFilter(e.target.value);
+                setPage(1);
+              }}
+              className="w-32"
+            >
+              <option value="">All floors</option>
+              {floors.map((f) => (
+                <option key={f} value={f}>Floor {f}</option>
+              ))}
+            </Select>
+          )}
+        </div>
         <div>
           <Input
             type="date"
@@ -1417,7 +1484,14 @@ export default function BookingsPage() {
           bookingId={previewStayId}
           hotelId={hotelId}
           timezone={timezone}
-          onClose={() => setPreviewStayId(null)}
+          onClose={() => {
+            setPreviewStayId(null);
+            // A top-up inside the modal changes payments/collection status,
+            // which the row's own "Collect ₹X" badge (computed from the list
+            // fetch, not the modal's data) wouldn't otherwise see until the
+            // next unrelated reload — so refresh the list on close too.
+            reload();
+          }}
         />
       )}
 
